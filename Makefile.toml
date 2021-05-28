@@ -1,0 +1,43 @@
+[config]
+skip_core_tasks = true
+
+[tasks.build-shim]
+install_crate = "cargo-wasi"
+cwd = "weealloc-shim"
+command = "cargo"
+args = ["wasi", "build", "--release"]
+
+[tasks.copy-shim]
+command = "cp"
+args = ["-f", "weealloc-shim/target/wasm32-wasi/release/weealloc_shim.wasm", "."]
+
+[tasks.build]
+dependencies = [
+    "build-shim",
+    "copy-shim"
+]
+
+[tasks.clean-shim-src]
+cwd = "weealloc-shim"
+command = "cargo"
+args = ["clean"]
+
+[tasks.rm-shim]
+command = "rm"
+args = ["-f", "weealloc_shim.wasm"]
+
+[tasks.clean]
+dependencies = [
+    "clean-shim-src",
+    "rm-shim"
+]
+
+[tasks.run-shim]
+command = "wasmtime"
+args = ["run", "--preload", "weealloc_shim=weealloc_shim.wasm", "knight.wat"]
+
+[tasks.run]
+dependencies = [
+    "build",
+    "run-shim"
+]
