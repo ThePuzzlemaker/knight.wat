@@ -17,10 +17,10 @@ pub static ALLOC: wee_alloc::WeeAlloc = WeeAlloc::INIT;
 /// - `align` must not be zero,
 /// - `align` must be a power of two
 /// - `size`, when rounded up to the nearest multiple of `align`, must not
-///    overflow (i.e., the rounded value must be less than or equal to
-///    `usize::MAX`),
+///   overflow (i.e., the rounded value must be less than or equal to
+///   `usize::MAX`),
 /// - `size`, when rounded up to the nearest multiple of `align`, must not
-///    be zero,
+///   be zero,
 /// - the allocated block of memory may or may not be initialized
 ///
 /// # Errors
