@@ -69,21 +69,24 @@
         (local $ciovec_ptr i32) (local $n_written i32)
 
         ;; Allocate a ciovec on the heap
-        (local.set $ciovec_ptr (call $malloc
-            (i32.const 8)
-            (i32.const 1)))
+        (local.set $ciovec_ptr
+            (call $malloc (i32.const 8) (i32.const 4)))
+
         ;; Allocate a u32 on the heap
-        (local.set $n_written (call $malloc
-            (i32.const 4)
-            (i32.const 1)))
+        (local.set $n_written
+            (call $malloc
+                (i32.const 4) (i32.const 1)))
 
         ;; Set the buffer of the ciovec to the buffer provided
-        (i32.store (local.get $ciovec_ptr) (local.get $str))
-        ;; Set the buffer length of the ciovec to the buffer length provided
-        (i32.store (block (result i32)
+        (i32.store
             (local.get $ciovec_ptr)
-            (i32.const 4)
-            (i32.add)) (local.get $len))
+            (local.get $str))
+
+        ;; Set the buffer length of the ciovec to the buffer length provided
+        (i32.store
+            (i32.add
+                (local.get $ciovec_ptr) (i32.const 4))
+            (local.get $len))
 
         ;; Write the data to stdout
         (call $fd_write
@@ -96,7 +99,7 @@
         (call $dealloc
             (local.get $ciovec_ptr)
             (i32.const 8)
-            (i32.const 1))
+            (i32.const 4))
         
         ;; Deallocate the n_written variable, which is not returned but is
         ;; required to be passed by fd_write, otherwise it would be writing to
@@ -118,39 +121,33 @@
         (local $i i32) (local $a i32) (local $b i32)
 
         ;; if s1 == s2, then the result is always `0` (equal)
-        (if (i32.eq (local.get $s1) (local.get $s2)) (return (i32.const 0)))
+        (if
+            (i32.eq
+                (local.get $s1) (local.get $s2))
+            (return (i32.const 0)))
 
         (block (loop
             ;; Make sure we don't overrun the buffer provided to us
-            (br_if 1 (i32.ge_u (local.get $i) (local.get $n)))
+            (br_if 1
+                (i32.ge_u (local.get $i) (local.get $n)))
 
             ;; Sign extend the current byte from s1 into a
             (local.set $a
-                (i32.load8_s (block (result i32)
-                    (local.get $s1)
-                    (local.get $i)
-                    (i32.add))))
+                (i32.load8_s
+                    (i32.add (local.get $s1) (local.get $i))))
 
             ;; Sign extend the current byte from s2 into b
             (local.set $b
-                (i32.load8_s (block (result i32)
-                    (local.get $s2)
-                    (local.get $i)
-                    (i32.add))))
+                (i32.load8_s
+                    (i32.add (local.get $s2) (local.get $i))))
 
             ;; If the two bytes are not equal, return their difference
             (if (i32.ne (local.get $a) (local.get $b))
-                (block 
-                    (local.get $a)
-                    (local.get $b)
-                    (i32.sub)
-                    (return)))
+                (i32.sub (local.get $a) (local.get $b)))
 
             ;; Increment i
             (local.set $i
-                (local.get $i)
-                (i32.const 1)
-                (i32.add))
+                (i32.add (local.get $i) (i32.const 1)))
 
             ;; Continue loop
             (br 0)
@@ -169,7 +166,10 @@
     ;; - `dest` and `src` must point to valid data up to an offset of `n` bytes
     (func $memmove (param $dest i32) (param $src i32) (param $n i32)
         ;; memory.copy acts like memmove, as it allows overlapping buffers
-        (memory.copy (local.get $dest) (local.get $src) (local.get $n))
+        (memory.copy
+            (local.get $dest)
+            (local.get $src)
+            (local.get $n))
     )
 
     ;; fn memset(s: *mut u8, c: i32, n: usize);
@@ -181,15 +181,18 @@
     ;; - `s` must point to valid data up to an offset of `n` bytes
     (func $memset (param $s i32) (param $c i32) (param $n i32)
         ;; memory.fill acts like memseet
-        (memory.fill (local.get $s) (local.get $c) (local.get $n))
+        (memory.fill
+            (local.get $s)
+            (local.get $c)
+            (local.get $n))
     )
 
     ;; fn abs(num: i32) -> i32
     ;; Computes the absolute value of a number. May overflow.
     (func $abs (param $num i32) (result i32)
         (if (i32.lt_s (local.get $num) (i32.const 0))
-            (block (i32.mul (local.get $num) (i32.const -1)) (return))
-            (block (local.get $num) (return)))
+            (return (i32.mul (local.get $num) (i32.const -1)))
+            (return (local.get $num)))
         (unreachable)
     )
 
@@ -197,7 +200,11 @@
     ;; Converts a signed integer to a string, allocated on the heap by this
     ;; function
     (func $i32tostr (param $num i32) (result i32 i32)
-        (local $buf i32) (local $ptr i32) (local $is_negative i32) (local $len i32) (local $new_buf i32)
+        (local $buf i32)
+        (local $ptr i32)
+        (local $is_negative i32)
+        (local $len i32)
+        (local $new_buf i32)
 
         ;; Allocate a buffer 11 characters long (the text length of
         ;; `-2**31 - 1`, the minimum value of an `i32`)
@@ -212,46 +219,58 @@
             (i32.const 11))
 
         ;; Set the pointer to the end of the buffer
-        (local.set $ptr (local.get $buf)
-                        (i32.const 10) ;; 10 = len(buf) - 1 = 11 - 1
-                        (i32.add))
+        (local.set $ptr
+            (i32.add (local.get $buf) (i32.const 10)))
 
         ;; Test whether or not this number is negative
-        (local.set $is_negative (i32.lt_s (local.get $num) (i32.const 0)))
+        (local.set $is_negative
+            (i32.lt_s (local.get $num) (i32.const 0)))
 
         (block (loop
             ;; Set the index of the current pointer to the digit as ASCII
             ;; `*ptr = '0' as u8 + abs(num % 10) as u8`
-            (i32.store8 (local.get $ptr)
-                (i32.const 0x30) ;; 0x30 - ASCII value of `0`
-                (call $abs (i32.rem_s (local.get $num) (i32.const 10)))
-                (i32.add))
+            (i32.store8
+                (local.get $ptr)
+                (i32.add
+                    (i32.const 0x30) ;; 0x30 - ASCII value of `0`
+                    (call $abs
+                        (i32.rem_s (local.get $num) (i32.const 10)))))
             
             ;; Decrement the pointer
-            (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1)))
+            (local.set $ptr
+                (i32.sub (local.get $ptr) (i32.const 1)))
 
             ;; Divide the number by 10 (signed integer division, not float
             ;; division) and then compute its absolute value
             ;; `num = abs(num / 10)`
-            (local.set $num (call $abs (i32.div_s (local.get $num) (i32.const 10))))
+            (local.set $num
+                (call $abs
+                    (i32.div_s (local.get $num) (i32.const 10))))
 
             ;; Break if the number is 0
-            (br_if 1 (i32.eqz (local.get $num)))
+            (br_if 1
+                (i32.eqz (local.get $num)))
             
             ;; Continue loop
             (br 0)
         ))
 
         ;; Add a negative sign if the number was negative
-        (if (i32.eq (local.get $is_negative) (i32.const 1))
-            (i32.store8 (local.get $ptr) (i32.const 0x2d)) ;; 0x2d - ASCII value of `-`
+        (if (i32.eq
+                (local.get $is_negative) (i32.const 1))
+            (i32.store8
+                (local.get $ptr)
+                (i32.const 0x2d)) ;; 0x2d - ASCII value of `-`
             ;; add 1 to pointer otherwise, so it doesn't read into unintialized
             ;; memory
-            (local.set $ptr (i32.add (local.get $ptr) (i32.const 1))))
+            (local.set $ptr
+                (i32.add (local.get $ptr) (i32.const 1))))
 
         ;; Calculate the length of the string
         (local.set $len
-            (i32.sub (i32.add (local.get $buf) (i32.const 11)) (local.get $ptr)))
+            (i32.sub
+                (i32.add (local.get $buf) (i32.const 11))
+                (local.get $ptr)))
 
         ;; Allocate a new buffer that is the right length
         (local.set $new_buf (call $malloc
@@ -288,7 +307,8 @@
         (local $buf i32) (local $len i32)
         
         ;; Calculate combined length
-        (local.set $len (i32.add (local.get $s1_len) (local.get $s2_len)))
+        (local.set $len
+            (i32.add (local.get $s1_len) (local.get $s2_len)))
 
         ;; Allocate buffer of sufficient length
         (local.set $buf (call $malloc
@@ -305,7 +325,8 @@
         ;; Copy second buffer
         ;; memmove(buf + s1_len, s2, s2_len)
         (call $memmove
-            (i32.add (local.get $buf) (local.get $s1_len))
+            (i32.add
+                (local.get $buf) (local.get $s1_len))
             (local.get $s2)
             (local.get $s2_len))
         
