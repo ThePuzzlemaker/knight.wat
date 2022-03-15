@@ -37,7 +37,7 @@ data
 ```
 
 This structure (along with the data in the files) produces the following output:
-```lisp
+```wasm
 ;;DATA BEGIN;;
     ;;; name: panic_double_free_msg
     ;;; size: 0x18
