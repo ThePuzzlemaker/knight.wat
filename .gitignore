@@ -1,2 +1,5 @@
-weealloc-shim/target
-weealloc_shim.wasm
+wat-datagen/target
+target/
+knight.wasm
+!wasm-runner-js/knight.wasm
+.vscode/

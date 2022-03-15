@@ -1,43 +1,57 @@
+[env]
+DATA_PATH = { glob = "./data/*", include_files = true, include_dirs = false, ignore_type = "git" }
+CARGO_MAKE_USE_WORKSPACE_PROFILE = false
+
 [config]
 skip_core_tasks = true
+default_to_workspace = false
 
-[tasks.build-shim]
-install_crate = "cargo-wasi"
-cwd = "weealloc-shim"
+[tasks.gen-data]
+condition = { env_set = ["DATA_PATH"] }
 command = "cargo"
-args = ["wasi", "build", "--release"]
+args = [
+    "run",
+    "-p", "wat-datagen",
+    "--", "knight.wat", "@@split(DATA_PATH,;)"
+]
 
-[tasks.copy-shim]
-command = "cp"
-args = ["-f", "weealloc-shim/target/wasm32-wasi/release/weealloc_shim.wasm", "."]
+[tasks.build-wat]
+command = "wat2wasm"
+args = [
+    "--enable-bulk-memory",
+    "--debug-names",
+    "knight.wat", "-o", "knight.wasm"
+]
 
 [tasks.build]
 dependencies = [
-    "build-shim",
-    "copy-shim"
+    "gen-data",
+    "build-wat",
 ]
 
-[tasks.clean-shim-src]
-cwd = "weealloc-shim"
+[tasks.clean-wat-datagen-src]
 command = "cargo"
 args = ["clean"]
 
-[tasks.rm-shim]
+[tasks.rm-wasm]
 command = "rm"
-args = ["-f", "weealloc_shim.wasm"]
+args = ["-f", "knight.wasm"]
 
 [tasks.clean]
 dependencies = [
-    "clean-shim-src",
-    "rm-shim"
+    "clean-wat-datagen-src",
+    "rm-wasm"
 ]
 
-[tasks.run-shim]
+[tasks.run-wasm]
 command = "wasmtime"
-args = ["run", "--preload", "weealloc_shim=weealloc_shim.wasm", "knight.wat"]
+args = [
+    "run",
+    "knight.wasm"
+]
 
 [tasks.run]
 dependencies = [
     "build",
-    "run-shim"
+    "run-wasm"
 ]

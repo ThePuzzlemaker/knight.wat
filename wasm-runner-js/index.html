@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>knight.WAT runner</title>
+    </head>
+    <body>
+        <style>
+            body {
+                font-family: 'MesloLGS NF', 'Consolas', monospace;
+            }
+        </style>
+
+        <button onclick="run_wasm()">Run!</button>
+        <button onclick="dump_mem()">Dump memory</button>
+        <div id="output"></div>
+        <script defer>
+            const output = document.getElementById("output");
+            let inst;
+            let mod;
+            let fd_write = (fd, ciovecs, n_ciovecs, n_written) => {
+                let view = new DataView(inst.exports["memory"].buffer);
+                let buf = [];
+                for (let i = 0; i < n_ciovecs; i++) {
+                    let buf_ptr_ptr = ciovecs + (i * 8);
+                    let len_ptr = ciovecs + (i * 8) + 4;
+                    let len = view.getUint32(len_ptr, true);
+                    let buf_ptr = view.getUint32(buf_ptr_ptr, true);
+                    for (let x = 0; x < len; x++) {
+                        buf.push(view.getUint8(buf_ptr + x));
+                    }
+                }
+                output.innerText += "[fd " + fd + "]: "+ (String.fromCharCode(...buf));
+                view.setUint32(n_written, buf.length, true);
+                return 0;
+            };
+            let proc_exit = (ec) => {
+                output.innerText += "[Status]: process exited with code " + ec + "\n";
+                throw ("PROCESS EXITED: " + ec);
+            };
+            let imports = {
+                wasi_snapshot_preview1: {
+                    fd_write,
+                    proc_exit,
+                }
+            };
+            WebAssembly.instantiateStreaming(fetch('knight.wasm'), imports)
+                .then(res => {
+                    output.innerText += "[Status]: Successfully loaded!\n";     
+                    inst = res.instance;
+                    mod = res.module;        
+                })
+                .catch(err => console.dir(err));
+            let run_wasm = () => {
+                output.innerText += "[Status]: Running...\n";
+                inst.exports._start();
+            };
+            const link = document.createElement('a');
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            let dump_mem = () => {
+                const blob = new Blob([inst.exports["memory"].buffer], {type:'application/octet-stream'});
+                const objUrl = URL.createObjectURL(blob);
+                link.href=objUrl;
+                link.click();
+            }
+        </script>
+    </body>
+</html>
