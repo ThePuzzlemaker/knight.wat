@@ -8,7 +8,7 @@ A (very) WIP implementation of [Knight][kn] in [WAT][wat]+[WASI][wasi] because I
 
 ## Instructions
 
-You will need to have [`cargo-make`][cargo-make], [`cargo-wasi`][cargo-wasi], and [`wasmtime`][wasmtime] installed.
+You will need to have [`cargo-make`][cargo-make] and [`wasmtime`][wasmtime] installed.
 (This will obviously require Rust to be installed previously, as well, which can be done with [Rustup][rustup])
 
 ```shell
@@ -84,6 +84,5 @@ Serve this directory with a web server allowing symlinks, make sure `knight.wasm
 It also has a built-in WASI shim for what knight.wat uses (which will extend in the future) so that it can be run and debugged in a web environment (as I've found that Chrome's debugging tools are quite good for WASM).
 
 [cargo-make]: https://github.com/sagiegurari/cargo-make
-[cargo-wasi]: https://github.com/bytecodealliance/cargo-wasi
 [wasmtime]: https://github.com/bytecodealliance/wasmtime
 [rustup]: https://rustup.rs
