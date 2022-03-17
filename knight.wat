@@ -433,10 +433,111 @@
     )
 
     ;;; __coalesce(ptr: *mut u8)
-    ;;; **!!!INTERNAL!!! !!!DO NOT USE!!!**
+    ;;; !!!INTERNAL, DO NOT USE!!!
+    ;;; This ALMOST CERTAINLY WILL corrupt your heap.
     ;;; free() coalescing.
     (func $__coalesce (param $ptr i32)
-        (nop)
+        ;; $forward_loop
+        (local $next i32) (local $size i32)
+        (local $temp_next i32)
+        ;; $backward_loop
+        (local $prev i32) (local $boundary_ptr i32)
+        (local $temp_prev i32) (local $temp_size i32)
+
+        ;; clear free bit
+        ;; this will always be here as we've ensured that this block is free.
+        ;; if someone calls this somehow elsewhere, that's their loss.
+        ;; size = ptr->size & -2;
+        (local.set $size (i32.and (i32.load (local.get $ptr))
+                                  (i32.const -2)))
+
+        (block $forward_loop_out (loop $forward_loop
+            (local.set $next (i32.add (local.get $ptr) (local.get $size)))
+
+            ;; if the next block isn't free, exit the loop.
+            (if (i32.eqz (i32.and (i32.load (local.get $next)) (i32.const 1)))
+                (br $forward_loop_out))
+            
+            ;; if it's not, we want to coalesce with this block.
+
+            ;; temp_next = next->next
+            (local.set $temp_next (i32.load (i32.add (local.get $next)
+                                                     (i32.const 4))))
+
+            ;; size += next->size & -2
+            (local.set $size (i32.add (local.get $size)
+                                      (i32.and (i32.load (local.get $next))
+                                               (i32.const -2))))
+            
+            ;; ptr->size = size | 1
+            (i32.store (local.get $ptr)
+                       (i32.or (local.get $size) (i32.const 1)))
+
+            ;; ptr->boundary_size = size | 1
+            (i32.store (i32.add (local.get $ptr)
+                                (i32.sub (local.get $size)
+                                         (i32.const 4)))
+                       (i32.or (local.get $size) (i32.const 1)))
+            
+            ;; ptr->next = temp_next
+            (i32.store (i32.add (local.get $ptr)
+                                (i32.const 4))
+                       (local.get $temp_next))
+
+            ;; if temp_next != null, temp_next->prev = ptr
+            (if (i32.ne (i32.const 0) (local.get $temp_next))
+                (i32.store (i32.add (local.get $temp_next)
+                                    (i32.const 8))
+                           (local.get $ptr)))
+            
+            (br $forward_loop)
+        ))
+        
+        (block $backward_loop_out (loop $backward_loop
+            ;; ptr-4 == prev->boundary_size
+            (local.set $boundary_ptr (i32.sub (local.get $ptr) (i32.const 4)))
+            ;; if the previous block isn't free, exit the loop.
+            (if (i32.eqz (i32.and
+                            (i32.load (local.get $boundary_ptr))
+                            (i32.const 1)))
+                (br $backward_loop_out))
+
+            ;; temp_size = prev->boundary_size & -2
+            (local.set $temp_size (i32.and (i32.load (local.get $boundary_ptr)) (i32.const -2)))
+
+            ;; prev = ptr - temp_size
+            (local.set $prev (i32.sub (local.get $ptr) (local.get $temp_size)))
+            
+            ;; temp_next = ptr->next
+            (local.set $temp_next (i32.load (i32.add (local.get $ptr) (i32.const 4))))
+
+            ;; size += temp_size
+            (local.set $size (i32.add (local.get $size) (local.get $temp_size)))
+
+            ;; prev->size = size | 1
+            (i32.store (local.get $prev) (i32.or (local.get $size) (i32.const 1)))
+
+            ;; prev->boundary_size = size | 1
+            (i32.store (i32.add (local.get $prev)
+                                (i32.sub (local.get $size)
+                                         (i32.const 4)))
+                       (i32.or (local.get $size) (i32.const 1)))
+
+
+            ;; prev->next = temp_next
+            (i32.store (i32.add (local.get $prev) (i32.const 4)) (local.get $temp_next))
+
+            ;; if temp_next != null, temp_next->prev = prev
+            (if (i32.ne (i32.const 0) (local.get $temp_next))
+                (i32.store (i32.add (local.get $temp_next)
+                                    (i32.const 8))
+                           (local.get $prev)))
+
+            ;; ptr = prev
+            (local.set $ptr (local.get $prev))
+
+            (br $backward_loop)
+        ))
     )
 
 
@@ -498,35 +599,30 @@
     ;;; - `str` must be a valid, well-aligned pointer to a valid UTF-8 string
     ;;; - `str` must point to valid data up to an offset of `n` bytes
     (func $print (param $str i32) (param $len i32) (result i32)
-        (local $ciovec_ptr i32) (local $n_written i32)
-
-        ;; Allocate a ciovec on the heap
-        (local.set $ciovec_ptr
-            (call $malloc (i32.const 8)))
-
-        ;; Set the buffer of the ciovec to the buffer provided
+        ;; static_ciovec->str = str
         (i32.store
-            (local.get $ciovec_ptr)
+            (global.get $data_static_ciovec_offset)
             (local.get $str))
 
-        ;; Set the buffer length of the ciovec to the buffer length provided
+        ;; static_ciovec->len = len
         (i32.store
             (i32.add
-                (local.get $ciovec_ptr) (i32.const 4))
+                (global.get $data_static_ciovec_offset) (i32.const 4))
             (local.get $len))
 
         ;; Write the data to stdout
         (call $fd_write
             (i32.const 1)
-            (local.get $ciovec_ptr)
+            ;; This is a static ciovec used only for this function and other functions that just need a single ciovec.
+            ;; While yes, static mutable things are generally bad, we're working on one thread. Guaranteed.
+            ;;   (Like, we don't even  have atomics *enabled* guaranteed.) So it doesn't matter.
+            ;; And we don't care if other functions clobber our data afterwards, as we only need
+            ;;  this for the duration of this fd_write call.
+            (global.get $data_static_ciovec_offset)
             (i32.const 1)
             ;; We use the `garbage_u32` for n_written as we need a valid pointer, but we don't care about the data.
             ;; and garbage_u32 is just for this purpose: useless data that's only written, never read.
             (global.get $data_garbage_u32_offset))
-
-        ;; Deallocate the ciovec array, as we don't need it anymore
-        (call $dealloc
-            (local.get $ciovec_ptr))
     )
 
     ;;; fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32;
@@ -819,7 +915,13 @@
     (global $data_garbage_u32_size i32 (i32.const 0x04))
     (data (i32.const 0x40) "\00\00\00\00")
 
-    (global $data_end i32 (i32.const 0x44))
+    ;;; name: static_ciovec
+    ;;; size: 0x08
+    (global $data_static_ciovec_offset i32 (i32.const 0x44))
+    (global $data_static_ciovec_size i32 (i32.const 0x08))
+    (data (i32.const 0x44) "\00\00\00\00\00\00\00\00")
+
+    (global $data_end i32 (i32.const 0x4c))
 ;;DATA END;;
 
     (global $heap_base i32 (i32.const 0x100))
