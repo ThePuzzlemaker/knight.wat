@@ -2,7 +2,7 @@
 
 A (very) WIP implementation of [Knight][kn] in [WAT][wat]+[WASI][wasi] because I love pain
 
-[kn]: https://github.com/knight-lang/knight
+[kn]: https://github.com/knight-lang/knight-lang
 [wat]: https://webassembly.github.io/spec/core/text/index.html
 [wasi]: https://github.com/WebAssembly/WASI
 
