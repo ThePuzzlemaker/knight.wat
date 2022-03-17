@@ -143,7 +143,7 @@
                                 ;; We need to grow the memory.
 
                                 ;; Round up to the nearest multiple of 65536 (which is 2^16, so we can use a power of two optimization)
-                                ;; Then divide and subtract from the existing memory.size to get the page delta.
+                                ;; Then divide to get the page delta.
                                 ;; (https://stackoverflow.com/a/9194117/5460075)
                                 ;; (numToRound + multiple - 1) & -multiple
                                 ;; == (numToRound + 65536 - 1) & -65536
@@ -151,12 +151,13 @@
 
                                 ;; TODO: review this. It seems janky but works, but it'll probably alloc more than we need in some rare cases.
                                 ;; we probably want to check based on actual_size - (memsize - next), not just actual_size but I'll have to look later
-                                (local.set $memdelta (i32.sub (i32.div_u 
+                                (local.set $memdelta (i32.div_u 
                                     (i32.and
-                                        (i32.add (local.get $actual_size)
+                                        (i32.add (i32.sub (local.get $actual_size)
+                                                          (i32.sub (local.get $memsize) (local.get $next)))
                                                  (i32.const 65535))
                                         (i32.const -65536))
-                                    (i32.const 65536)) (memory.size)))
+                                    (i32.const 65536)))
 
                                 (memory.grow (local.get $memdelta))
                                 (drop)))
@@ -455,8 +456,7 @@
             (local.set $next (i32.add (local.get $ptr) (local.get $size)))
 
             ;; if the next block isn't free, exit the loop.
-            (if (i32.eqz (i32.and (i32.load (local.get $next)) (i32.const 1)))
-                (br $forward_loop_out))
+            (br_if $forward_loop_out (i32.eqz (i32.and (i32.load (local.get $next)) (i32.const 1))))
             
             ;; if it's not, we want to coalesce with this block.
 
@@ -497,10 +497,8 @@
             ;; ptr-4 == prev->boundary_size
             (local.set $boundary_ptr (i32.sub (local.get $ptr) (i32.const 4)))
             ;; if the previous block isn't free, exit the loop.
-            (if (i32.eqz (i32.and
-                            (i32.load (local.get $boundary_ptr))
-                            (i32.const 1)))
-                (br $backward_loop_out))
+            (br_if $backward_loop_out (i32.eqz (i32.and (i32.load (local.get $boundary_ptr))
+                                                                  (i32.const 1))))
 
             ;; temp_size = prev->boundary_size & -2
             (local.set $temp_size (i32.and (i32.load (local.get $boundary_ptr)) (i32.const -2)))
@@ -625,6 +623,68 @@
             (global.get $data_garbage_u32_offset))
     )
 
+    ;;; fn __memcmp_fast(s1: *const u8, s2: *const u8, n: usize, n_fast: usize, n_slow: usize) -> i32;
+    ;;; memcmp fast path (uses SIMD)
+    ;;; Do not use directly, just use memcmp.
+    (func $__memcmp_fast (param $s1 i32) (param $s2 i32) (param $n i32)
+                       (param $n_fast i32) (param $n_slow i32) (result i32)
+        (local $v v128) (local $tmp_ptr i32)
+        (block $loop_out (loop $loop
+            (br_if $loop_out (i32.eqz (local.get $n_fast)))
+
+            (local.set $v (i8x16.sub (v128.load (local.get $s1))
+                                     (v128.load (local.get $s2))))
+
+            (if (v128.any_true (local.get $v))
+                (block
+                    ;; I don't know of a better way to do this :/
+                    (v128.store (global.get $data_garbage_v128_offset) (local.get $v))
+                    (local.set $tmp_ptr (global.get $data_garbage_v128_offset))
+                    (block $slow_loop_out (loop $slow_loop
+                        (br_if $slow_loop_out (i32.ne (i32.const 0) (i32.load8_s (local.get $tmp_ptr))))
+                        (local.set $tmp_ptr (i32.add (local.get $tmp_ptr) (i32.const 1)))
+                        (br $slow_loop)
+                    ))
+                    (return (i32.load (local.get $tmp_ptr)))
+                ))
+
+            (local.set $s1 (i32.add (local.get $s1) (i32.const 16)))
+            (local.set $s2 (i32.add (local.get $s2) (i32.const 16)))
+            (local.set $n_fast (i32.sub (local.get $n_fast) (i32.const 1)))
+            (br $loop)
+        ))
+
+        (if (i32.eqz (local.get $n_slow))
+            (return (i32.const 0))
+            (return (call $__memcmp_slow (local.get $s1) (local.get $s2) (local.get $n_slow))))
+        (unreachable)
+    )
+
+    ;;; fn __memcmp_slow(s1: *const u8, s2: *const u8, n: usize) -> i32;
+    ;;; memcmp slow path (cannot use SIMD as n < 16)
+    ;;; Do not use directly, just use memcmp.
+    (func $__memcmp_slow (param $s1 i32) (param $s2 i32) (param $n i32) (result i32)
+        (local $x i32)
+
+        (block $loop_out (loop $loop
+            (br_if $loop_out (i32.eqz (local.get $n)))
+
+            (local.tee $x (i32.sub
+                            (i32.load8_s (local.get $s1))
+                            (i32.load8_s (local.get $s2))))
+
+            (if (i32.ne (i32.const 0))
+                (return (local.get $x)))
+
+            (local.set $s1 (i32.add (local.get $s1) (i32.const 1)))
+            (local.set $s2 (i32.add (local.get $s2) (i32.const 1)))
+            (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+            (br $loop)
+        ))
+
+        (i32.const 0)
+    )
+
     ;;; fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32;
     ;;; This function emulates libc's memcmp.
     ;;;
@@ -633,45 +693,18 @@
     ;;; - `s1` and `s2` must be valid well-aligned pointers
     ;;; - `s1` and `s2` must point to valid data up to an offset of `n` bytes
     (func $memcmp (param $s1 i32) (param $s2 i32) (param $n i32) (result i32)
-        (local $i i32) (local $a i32) (local $b i32)
-
         ;; if s1 == s2, then the result is always `0` (equal)
-        (if
-            (i32.eq
+        (if (i32.eq
                 (local.get $s1) (local.get $s2))
             (return (i32.const 0)))
 
-        ;; TODO: vectorize this!
-        (block $loop_out (loop $loop
-            ;; Make sure we don't overrun the buffer provided to us
-            (br_if $loop_out
-                (i32.ge_u (local.get $i) (local.get $n)))
-
-            ;; Sign extend the current byte from s1 into a
-            (local.set $a
-                (i32.load8_s
-                    (i32.add (local.get $s1) (local.get $i))))
-
-            ;; Sign extend the current byte from s2 into b
-            (local.set $b
-                (i32.load8_s
-                    (i32.add (local.get $s2) (local.get $i))))
-
-            ;; If the two bytes are not equal, return their difference
-            (if (i32.ne (local.get $a) (local.get $b))
-                (block
-                    (return (i32.sub (local.get $a) (local.get $b)))))
-
-            ;; Increment i
-            (local.set $i
-                (i32.add (local.get $i) (i32.const 1)))
-
-            ;; Continue loop
-            (br $loop)
-        ))
-
-        ;; Return `0` (equal) elsewise
-        (i32.const 0)
+        ;; if n >= 16, we can vectorize.
+        (if (i32.ge_u (local.get $n) (i32.const 16))
+            (return (call $__memcmp_fast (local.get $s1) (local.get $s2) (local.get $n)
+                (i32.div_u (local.get $n) (i32.const 16))
+                (i32.rem_u (local.get $n) (i32.const 16))))
+            (return (call $__memcmp_slow (local.get $s1) (local.get $s2) (local.get $n))))
+        (unreachable)
     )
 
     ;;; fn memcpy(dest: *const u8, src: *const u8, n: usize) -> *mut u8;
@@ -921,7 +954,13 @@
     (global $data_static_ciovec_size i32 (i32.const 0x08))
     (data (i32.const 0x44) "\00\00\00\00\00\00\00\00")
 
-    (global $data_end i32 (i32.const 0x4c))
+    ;;; name: garbage_v128
+    ;;; size: 0x10
+    (global $data_garbage_v128_offset i32 (i32.const 0x4c))
+    (global $data_garbage_v128_size i32 (i32.const 0x10))
+    (data (i32.const 0x4c) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
+
+    (global $data_end i32 (i32.const 0x5c))
 ;;DATA END;;
 
     (global $heap_base i32 (i32.const 0x100))

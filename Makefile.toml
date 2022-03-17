@@ -19,6 +19,7 @@ args = [
 command = "wat2wasm"
 args = [
     "--enable-bulk-memory",
+    "--enable-simd",
     "--debug-names",
     "knight.wat", "-o", "knight.wasm"
 ]
