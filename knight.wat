@@ -114,7 +114,7 @@
         ;; ptr = heap_base
         (local.set $ptr (global.get $heap_base))
 
-        (block $loop_out (loop
+        (block $loop_out (loop $loop
             ;; next = ptr->next
             (local.set $next
                 (i32.load (i32.add (local.get $ptr)
@@ -198,7 +198,7 @@
                     (local.set $best_ptr (local.get $next))))
             (local.set $ptr (local.get $next))
 
-            (br 0)
+            (br $loop)
         ))
 
         ;; split the block, iff best_size - actual_size >= 16
@@ -641,9 +641,10 @@
                 (local.get $s1) (local.get $s2))
             (return (i32.const 0)))
 
-        (block (loop
+        ;; TODO: vectorize this!
+        (block $loop_out (loop $loop
             ;; Make sure we don't overrun the buffer provided to us
-            (br_if 1
+            (br_if $loop_out
                 (i32.ge_u (local.get $i) (local.get $n)))
 
             ;; Sign extend the current byte from s1 into a
@@ -659,15 +660,14 @@
             ;; If the two bytes are not equal, return their difference
             (if (i32.ne (local.get $a) (local.get $b))
                 (block
-                    (i32.sub (local.get $a) (local.get $b))
-                    (br 2)))
+                    (return (i32.sub (local.get $a) (local.get $b)))))
 
             ;; Increment i
             (local.set $i
                 (i32.add (local.get $i) (i32.const 1)))
 
             ;; Continue loop
-            (br 0)
+            (br $loop)
         ))
 
         ;; Return `0` (equal) elsewise
@@ -764,7 +764,7 @@
         (local.set $is_negative
             (i32.lt_s (local.get $num) (i32.const 0)))
 
-        (block (loop
+        (block $loop_out (loop $loop
             ;; Set the index of the current pointer to the digit as ASCII
             ;; `*ptr = '0' as u8 + abs(num % 10) as u8`
             (i32.store8
@@ -786,11 +786,11 @@
                     (i32.div_s (local.get $num) (i32.const 10))))
 
             ;; Break if the number is 0
-            (br_if 1
+            (br_if $loop_out
                 (i32.eqz (local.get $num)))
             
             ;; Continue loop
-            (br 0)
+            (br $loop)
         ))
 
         ;; Add a negative sign if the number was negative
