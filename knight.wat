@@ -327,11 +327,8 @@
         ;; if this block is already free (size & 1 != 0), then panic
         (if (i32.ne (i32.const 0) (i32.and (local.get $size) (i32.const 1)))
             (block 
-                ;; TODO: proper panic
-                (call $fd_write (i32.const 1)
-                    (global.get $data_panic_double_free_ciovec_offset)
-                    (i32.const 1)
-                    (global.get $data_garbage_u32_offset))
+                (call $print (global.get $data_panic_double_dealloc_offset)
+                             (global.get $data_panic_double_dealloc_size))
                 (drop)
                 (call $proc_exit (i32.const 1))
                 (unreachable)))
@@ -553,7 +550,7 @@
     ;;; This function will return a null pointer if the reallocation failed.
     ;;; However, the old block is still valid in this case.
     ;; TODO: this could be rewritten knowing the malloc internals, in such a
-    ;;  way that it would be more efficient when we can just expand the current block.
+    ;;  way that it would be more efficient when we can just expand/split the current block.
     (func $realloc (param $ptr i32) (param $new_size i32) (result i32)
         (local $new_ptr i32) (local $old_size i32)
         
@@ -782,13 +779,6 @@
         (local.set $buf (call $malloc
             (i32.const 11)))
 
-        ;; Zero out this buffer
-        (call $memset
-            (local.get $buf)
-            (i32.const 0)
-            (i32.const 11))
-        (drop)
-
         ;; Set the pointer to the end of the buffer
         (local.set $ptr
             (i32.add (local.get $buf) (i32.const 10)))
@@ -827,8 +817,7 @@
         ))
 
         ;; Add a negative sign if the number was negative
-        (if (i32.eq
-                (local.get $is_negative) (i32.const 1))
+        (if (local.get $is_negative)
             (i32.store8
                 (local.get $ptr)
                 (i32.const 0x2d)) ;; 0x2d - ASCII value of `-`
@@ -888,29 +877,214 @@
         (local.get $buf)
     )
 
+    ;;; fn snprintf(
+    ;;;     buf: *mut u8, buf_len: isize,
+    ;;;     fmt: *const u8, fmt_len: isize,
+    ;;;     args: *const u8) -> isize;
+    ;;; Print a formatted string to the provided buffer.
+    ;;; If the string could be fully printed, the number of characters printed is returned.
+    ;;; Otherwise, `-new_size` is returned where `new_size` is how large the buffer needs to be to successfully print.
+    ;;;
+    ;;; `args` is a pointer to an argument list, whose format is explained below.
+    ;;; `args` may be null (0) IF AND ONLY IF the format string provided does not contain ANY specifiers (excluding `%%`).
+    ;;;
+    ;;; # Supported Format Specifiers
+    ;;; 
+    ;;; - `%s`: string
+    ;;; - `%d`: i32
+    ;;; - `%%`: just prints `%`.
+    ;;;
+    ;;; # Argument List
+    ;;;
+    ;;; The following list contains inline struct definitions for printf-family functions.
+    ;;; All padding fields are undefined and may be arbitrary data.
+    ;;;
+    ;;; - `%s`:
+    ;;;     ptr: *mut u8, len: usize
+    ;;; - `%d`:
+    ;;;     val: i32, padding: u32
+    (func $snprintf (param $buf i32) (param $buf_len i32)
+                    (param $fmt i32) (param $fmt_len i32)
+                    (param $args i32) (result i32)
+        (local $fmt_i i32) (local $buf_i i32)
+        (local $byte i32) (local $byte_next i32)
+        (local $fmt_ptr i32) (local $buf_ptr i32)
+        (local $copy_begin i32) (local $copy_len i32)
+        (local $arg_i i32)
+        (local $arg_ptr i32) (local $str_ptr i32) (local $str_len i32)
+        (local $simulate i32)
+
+        (block $loop_out (loop $loop
+            (br_if $loop_out (i32.ge_u (local.get $fmt_i) (local.get $fmt_len)))
+            (if (i32.ge_u (local.get $buf_i) (local.get $buf_len))
+                (local.set $simulate (i32.const 1)))
+            
+            (local.set $fmt_ptr (i32.add (local.get $fmt) (local.get $fmt_i)))
+            (local.set $buf_ptr (i32.add (local.get $buf) (local.get $buf_i)))
+
+            (if (i32.eqz (local.get $copy_len))
+                (local.set $copy_begin (local.get $fmt_ptr)))
+
+            (local.set $byte (i32.load8_u (local.get $fmt_ptr)))
+
+            (if (i32.eq (local.get $byte) (i32.const 0x25)) ;; 0x25 - `%`
+                (block
+                    ;; handle copying a block, if one exists
+                    (if (i32.ne (local.get $copy_len) (i32.const 0))
+                        (block
+                            ;; buf_i + copy_len >= buf_len => can't copy this block
+                            (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $copy_len))
+                                          (local.get $buf_len))
+                                (local.set $simulate (i32.const 1)))
+                            
+                            (if (i32.eqz (local.get $simulate))
+                                (block
+                                    (call $memcpy
+                                        (local.get $buf_ptr)
+                                        (local.get $copy_begin)
+                                        (local.get $copy_len))
+                                    (drop)))
+
+
+                            ;; reset copy_len, update buf_ptr and buf_i
+                            (local.set $buf_ptr (i32.add (local.get $buf_ptr) (local.get $copy_len)))
+                            (local.set $buf_i (i32.add (local.get $buf_i) (local.get $copy_len)))
+                            (local.set $copy_len (i32.const 0))
+                        ))
+
+                    ;; fmt_i + 1 >= fmt_len => panic, we can't pull another char
+                    ;; TODO: panic
+                    (if (i32.ge_u (i32.add (local.get $fmt_i) (i32.const 1))
+                                  (local.get $fmt_len))
+                        (unreachable))
+                    
+                    (local.set $byte_next (i32.load8_u (i32.add (local.get $fmt_ptr) (i32.const 1))))
+
+                    (if (i32.eq (local.get $byte_next) (i32.const 0x25)) ;; 0x25 - `%`
+                        (block
+                            (if (i32.eqz (local.get $simulate))
+                                (i32.store8 (local.get $buf_ptr) (i32.const 0x25)))
+                            (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 2)))
+                            (local.set $buf_i (i32.add (local.get $buf_i) (i32.const 1)))
+                            (br $loop)))
+                    (if (i32.eq (local.get $byte_next) (i32.const 0x73)) ;; 0x73 - `s`
+                        (block
+                            (local.set $arg_ptr (i32.add (local.get $args) (i32.mul (local.get $arg_i)
+                                                                                    ;; 8: sizeof(arg)
+                                                                                    (i32.const 8))))
+                            (local.set $str_ptr (i32.load (local.get $arg_ptr)))
+                            (local.set $str_len (i32.load (i32.add (local.get $arg_ptr) (i32.const 4))))
+
+                            ;; buf_i + str_len >= buf_len => can't copy this string
+                            (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $str_len))
+                                          (local.get $buf_len))
+                                (local.set $simulate (i32.const 1)))
+                            
+                            (if (i32.eqz (local.get $simulate))
+                                (block
+                                    (call $memcpy
+                                        (local.get $buf_ptr)
+                                        (local.get $str_ptr)
+                                        (local.get $str_len))
+                                    (drop)))
+
+                            (local.set $arg_i (i32.add (local.get $arg_i) (i32.const 1)))
+                            (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 2)))
+                            (local.set $buf_i (i32.add (local.get $buf_i) (local.get $str_len)))
+                            (br $loop)))
+
+                    ;; TODO: panic, malformed fmt string
+                    (unreachable)
+                )
+                (block
+                    (local.set $copy_len (i32.add (local.get $copy_len) (i32.const 1)))
+                ))
+
+            (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 1)))
+            (br $loop)
+        ))
+
+        ;; handle copying a block, if one exists
+        (if (i32.ne (local.get $copy_len) (i32.const 0))
+            (block
+                ;; buf_i + copy_len >= buf_len => can't copy this block
+                (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $copy_len))
+                              (local.get $buf_len))
+                    (local.set $simulate (i32.const 1)))
+                
+                (if (i32.eqz (local.get $simulate))
+                    (block
+                        (call $memcpy
+                            (local.get $buf_ptr)
+                            (local.get $copy_begin)
+                            (local.get $copy_len))
+                        (drop)))
+
+                ;; reset copy_len, update buf_ptr and buf_i
+                (local.set $buf_ptr (i32.add (local.get $buf_ptr) (local.get $copy_len)))
+                (local.set $buf_i (i32.add (local.get $buf_i) (local.get $copy_len)))
+                (local.set $copy_len (i32.const 0))
+            ))
+
+        (select
+            (i32.sub (i32.const 0)
+                     (i32.add (local.get $buf_i) (i32.const 1)))
+            (local.get $buf_i)
+            (local.get $simulate))
+    )
+
+    ;;; fn sprintf(fmt: *mut u8, fmt_len: isize, args: *const u8) -> (*mut u8, isize);
+    ;;; Print a formatted string to a buffer allocated by this function.
+    ;;; See `snprintf` for more documentation.
+    (func $sprintf (param $fmt i32) (param $fmt_len i32) (param $args i32) (result i32 i32)
+        (local $buf i32) (local $len i32) (local $res i32)
+    
+        ;; Estimate a len ≈ fmt_len + 32
+        ;; For what I'd consider "most" format strings (excluding, possibly, ones using `%s`), this is fine.
+        (local.set $len (i32.add (local.get $fmt_len) (i32.const 32)))
+
+        (local.set $buf (call $malloc (local.get $len)))
+
+        (local.set $res (call $snprintf (local.get $buf) (local.get $len)
+                                        (local.get $fmt) (local.get $fmt_len)
+                                        (local.get $args)))
+        (if (i32.lt_s (local.get $res) (i32.const 0))
+            (block
+                ;; extend the buffer as needed
+                (local.set $len (i32.sub (i32.const 0) (local.get $res)))
+                (local.set $buf (call $realloc (local.get $buf) (local.get $len)))
+                (local.set $res (call $snprintf (local.get $buf) (local.get $len)
+                                                (local.get $fmt) (local.get $fmt_len)
+                                                (local.get $args)))
+            )
+            (block
+                ;; large string/buffer optimization: shrink the buffer
+                (local.set $buf (call $realloc (local.get $buf) (local.get $res)))
+            ))
+        (local.get $res)
+        (local.get $buf)
+    )
+
     ;; === Start === ;;
 
     (func $main (export "_start")
-        (local $str i32) (local $len i32)
+        (local $str i32) (local $arg i32) (local $len i32)
 
-        (local.set $str
-            (call $memdup
-                (global.get $data_str1_offset)
-                (global.get $data_str1_size)))
+        (local.set $arg
+            (call $malloc (i32.const 8)))
+        (i32.store (local.get $arg) (global.get $data_str2_offset))
+        (i32.store (i32.add (local.get $arg) (i32.const 4)) (global.get $data_str2_size))
 
-        (call $memcat
-            (local.get $str)
-            (global.get $data_str1_size)
-            (global.get $data_str2_offset)
-            (global.get $data_str2_size))
+        (call $sprintf (global.get $data_str3_offset) (global.get $data_str3_size)
+                                        (local.get $arg))
         (local.set $str)
         (local.set $len)
-
-        (call $print
-            (local.get $str)
-            (local.get $len))
+        
+        (call $print (local.get $str) (local.get $len))
         (drop)
 
+        (call $dealloc
+            (local.get $arg))
         (call $dealloc
             (local.get $str))
     )
@@ -924,43 +1098,43 @@
     (global $data_panic_double_free_msg_size i32 (i32.const 0x18))
     (data (i32.const 0x00) "panic: double dealloc()\n")
 
-    ;;; name: panic_double_free_ciovec
-    ;;; size: 0x08
-    (global $data_panic_double_free_ciovec_offset i32 (i32.const 0x18))
-    (global $data_panic_double_free_ciovec_size i32 (i32.const 0x08))
-    (data (i32.const 0x18) "\00\00\00\00\18\00\00\00")
-
     ;;; name: str1
     ;;; size: 0x0e
-    (global $data_str1_offset i32 (i32.const 0x20))
+    (global $data_str1_offset i32 (i32.const 0x18))
     (global $data_str1_size i32 (i32.const 0x0e))
-    (data (i32.const 0x20) "Hello, world!\n")
+    (data (i32.const 0x18) "Hello, world!\n")
 
     ;;; name: str2
     ;;; size: 0x10
-    (global $data_str2_offset i32 (i32.const 0x30))
+    (global $data_str2_offset i32 (i32.const 0x28))
     (global $data_str2_size i32 (i32.const 0x10))
-    (data (i32.const 0x30) "This is a test!\n")
+    (data (i32.const 0x28) "This is a test!\n")
+
+    ;;; name: str3
+    ;;; size: 0x10
+    (global $data_str3_offset i32 (i32.const 0x38))
+    (global $data_str3_size i32 (i32.const 0x10))
+    (data (i32.const 0x38) "Hello, world! %s")
 
     ;;; name: garbage_u32
     ;;; size: 0x04
-    (global $data_garbage_u32_offset i32 (i32.const 0x40))
+    (global $data_garbage_u32_offset i32 (i32.const 0x48))
     (global $data_garbage_u32_size i32 (i32.const 0x04))
-    (data (i32.const 0x40) "\00\00\00\00")
+    (data (i32.const 0x48) "\00\00\00\00")
 
     ;;; name: static_ciovec
     ;;; size: 0x08
-    (global $data_static_ciovec_offset i32 (i32.const 0x44))
+    (global $data_static_ciovec_offset i32 (i32.const 0x4c))
     (global $data_static_ciovec_size i32 (i32.const 0x08))
-    (data (i32.const 0x44) "\00\00\00\00\00\00\00\00")
+    (data (i32.const 0x4c) "\00\00\00\00\00\00\00\00")
 
     ;;; name: garbage_v128
     ;;; size: 0x10
-    (global $data_garbage_v128_offset i32 (i32.const 0x4c))
+    (global $data_garbage_v128_offset i32 (i32.const 0x54))
     (global $data_garbage_v128_size i32 (i32.const 0x10))
-    (data (i32.const 0x4c) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
+    (data (i32.const 0x54) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
 
-    (global $data_end i32 (i32.const 0x5c))
+    (global $data_end i32 (i32.const 0x64))
 ;;DATA END;;
 
     (global $heap_base i32 (i32.const 0x100))
