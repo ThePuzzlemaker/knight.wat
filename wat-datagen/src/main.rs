@@ -12,6 +12,11 @@ pub struct Args {
     #[clap(parse(from_str))]
     file: PathBuf,
 
+    /// The elements file. This is a list of functions to turn into element segments.
+    #[clap(required = true)]
+    #[clap(parse(from_str))]
+    elems: PathBuf,
+
     #[clap(parse(from_str))]
     files: Vec<PathBuf>,
 }
@@ -81,6 +86,32 @@ fn main() -> eyre::Result<()> {
         new_data_string,
         "    (global $data_end i32 (i32.const 0x{:<02x}))",
         offset
+    )?;
+
+    writeln!(new_data_string)?;
+    let elems = fs::read_to_string(args.elems)?;
+    let mut idx = 0;
+    let mut funcs = vec![];
+    for line in elems.lines() {
+        if line.is_empty() || line.starts_with(";;") {
+            continue;
+        }
+        writeln!(
+            new_data_string,
+            "    (global $elem_{} i32 (i32.const {}))",
+            line, idx
+        )?;
+        idx += 1;
+        funcs.push(line);
+    }
+    writeln!(
+        new_data_string,
+        "    (elem (i32.const 0) {})",
+        funcs
+            .into_iter()
+            .map(|x| format!("${}", x))
+            .collect::<Vec<_>>()
+            .join(" ")
     )?;
     writeln!(new_data_string, ";;DATA END;;")?;
 

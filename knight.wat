@@ -17,6 +17,9 @@
     ;;; the environment.
     (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
 
+    ;;; type dropper = fn(ptr: *const ());
+    (type $dropper (func (param i32)))
+
     ;; === Memory Allocation === ;;
 
     ;;; some notes about the algorithm:
@@ -117,8 +120,7 @@
         (block $loop_out (loop $loop
             ;; next = ptr->next
             (local.set $next
-                (i32.load (i32.add (local.get $ptr)
-                                   (i32.const 4))))
+                (i32.load offset=4 (local.get $ptr)))
 
             (if (i32.eqz (local.get $next)) (block
                 (if (i32.eqz (local.get $best_size))
@@ -129,7 +131,7 @@
                         ;; We use heap_base->prev to be the beginning of the first unmanaged section.
                         ;; next = heap_base->prev
                         (local.set $next
-                            (i32.load (i32.add (global.get $heap_base) (i32.const 8))))
+                            (i32.load offset=8 (global.get $heap_base)))
 
                         (local.set $memsize
                             ;; memory.size works in page units, each page is 64 KiB (65536 bytes)
@@ -172,8 +174,8 @@
                         
                         ;; We have our new block. We don't need to splice this out of the free list as it wasn't in it, anyway.
                         ;; But we do need to mark where the heap ends now so we properly allocate next time.
-                        (i32.store (i32.add (global.get $heap_base)
-                                            (i32.const 8))
+                        ;; heap_base->prev = next + actual_size;
+                        (i32.store offset=8 (global.get $heap_base)
                                    (i32.add (local.get $next) (local.get $actual_size)))
 
                         ;; But we don't want our caller to overwrite our precious size metadata
@@ -221,13 +223,11 @@
                 
                 ;; temp_next = best_ptr->next
                 (local.set $temp_next
-                    (i32.load (i32.add (local.get $best_ptr)
-                                       (i32.const 4))))
+                    (i32.load offset=4 (local.get $best_ptr)))
                 
                 ;; temp_prev = best_ptr->prev
                 (local.set $temp_prev
-                    (i32.load (i32.add (local.get $best_ptr)
-                                       (i32.const 8))))
+                    (i32.load offset=8 (local.get $best_ptr)))
 
                 ;; best_ptr->size = actual_size
                 (i32.store (local.get $best_ptr) (local.get $actual_size))
@@ -248,21 +248,21 @@
                 ;; splice this new block into of the list
 
                 ;; next->next = temp_next
-                (i32.store (i32.add (local.get $next) (i32.const 4))
+                (i32.store offset=4 (local.get $next)
                     (local.get $temp_next))
 
                 ;; next->prev = temp_prev
-                (i32.store (i32.add (local.get $next) (i32.const 8))
+                (i32.store offset=8 (local.get $next)
                     (local.get $temp_prev))
 
                 ;; temp_prev->next = next
-                (i32.store (i32.add (local.get $temp_prev) (i32.const 4))
+                (i32.store offset=4 (local.get $temp_prev)
                     (local.get $next))
                 
                 ;; if temp_next != null, set its prev
                 (if (i32.ne (i32.const 0) (local.get $temp_next))
-                        ;; temp_next->prev = next
-                    (i32.store (i32.add (local.get $temp_next) (i32.const 8))
+                    ;; temp_next->prev = next
+                    (i32.store offset=8 (local.get $temp_next)
                         (local.get $next)))
                 
 
@@ -271,12 +271,10 @@
             )
             (block
                 ;; next = best_ptr->next
-                (local.set $next (i32.load
-                    (i32.add (local.get $best_ptr) (i32.const 4))))
+                (local.set $next (i32.load offset=4 (local.get $best_ptr)))
 
                 ;; temp_prev = best_ptr->prev
-                (local.set $temp_prev (i32.load
-                    (i32.add (local.get $best_ptr) (i32.const 8))))
+                (local.set $temp_prev (i32.load offset=8 (local.get $best_ptr)))
 
                 ;; set the size properly
                 
@@ -291,13 +289,11 @@
                 ;; splice this block out of the list
 
                 ;; temp_prev->next = next
-                (i32.store (i32.add (local.get $temp_prev)
-                                    (i32.const 4))
+                (i32.store offset=4 (local.get $temp_prev)
                            (local.get $next))
 
                 ;; next->prev = temp_prev
-                (i32.store (i32.add (local.get $next)
-                                    (i32.const 8))
+                (i32.store offset=8 (local.get $next)
                            (local.get $temp_prev))
                 
                 ;; again, point to the actual data, not the size tag
@@ -338,16 +334,14 @@
         (loop $loop
             ;; next = traverse_ptr->next
             (local.set $next
-                (i32.load (i32.add (local.get $traverse_ptr)
-                                   (i32.const 4))))
+                (i32.load offset=4 (local.get $traverse_ptr)))
             
             ;; if next == 0 then we need to add this to the list, not splice it in.
             (if (i32.eqz (local.get $next))
                 (block
                     ;; add to list
                     ;; traverse_ptr->next = ptr
-                    (i32.store (i32.add (local.get $traverse_ptr)
-                                        (i32.const 4))
+                    (i32.store offset=4 (local.get $traverse_ptr)
                                (local.get $ptr))
                     
                     ;; set free bit
@@ -362,13 +356,11 @@
                     ;; make sure we zero out the next ptr and set the prev ptr
                     
                     ;; ptr->next = 0
-                    (i32.store (i32.add (local.get $ptr)
-                                        (i32.const 4))
+                    (i32.store offset=4 (local.get $ptr)
                                (i32.const 0))
                     
                     ;; ptr->prev = traverse_ptr
-                    (i32.store (i32.add (local.get $ptr)
-                                        (i32.const 8))
+                    (i32.store offset=8 (local.get $ptr)
                                (local.get $traverse_ptr))
 
                     ;; coalesce.
@@ -387,25 +379,21 @@
                     ;; splice block in list
 
                     ;; traverse_ptr->next = ptr
-                    (i32.store (i32.add (local.get $traverse_ptr)
-                                        (i32.const 4))
+                    (i32.store offset=4 (local.get $traverse_ptr)
                                (local.get $ptr))
 
                     ;; next->prev = ptr
-                    (i32.store (i32.add (local.get $next)
-                                        (i32.const 8))
+                    (i32.store offset=8 (local.get $next)
                                (local.get $ptr))
                     
                     ;; make sure we set next and prev accordingly
                     
                     ;; ptr->next = next
-                    (i32.store (i32.add (local.get $ptr)
-                                        (i32.const 4))
+                    (i32.store offset=4 (local.get $ptr)
                                (local.get $next))
                     
                     ;; ptr->prev = traverse_ptr
-                    (i32.store (i32.add (local.get $ptr)
-                                        (i32.const 8))
+                    (i32.store offset=8 (local.get $ptr)
                                (local.get $traverse_ptr))
 
                     ;; set free bit
@@ -458,8 +446,7 @@
             ;; if it's not, we want to coalesce with this block.
 
             ;; temp_next = next->next
-            (local.set $temp_next (i32.load (i32.add (local.get $next)
-                                                     (i32.const 4))))
+            (local.set $temp_next (i32.load offset=4 (local.get $next)))
 
             ;; size += next->size & -2
             (local.set $size (i32.add (local.get $size)
@@ -477,14 +464,12 @@
                        (i32.or (local.get $size) (i32.const 1)))
             
             ;; ptr->next = temp_next
-            (i32.store (i32.add (local.get $ptr)
-                                (i32.const 4))
+            (i32.store offset=4 (local.get $ptr)
                        (local.get $temp_next))
 
             ;; if temp_next != null, temp_next->prev = ptr
             (if (i32.ne (i32.const 0) (local.get $temp_next))
-                (i32.store (i32.add (local.get $temp_next)
-                                    (i32.const 8))
+                (i32.store offset=8 (local.get $temp_next)
                            (local.get $ptr)))
             
             (br $forward_loop)
@@ -504,7 +489,7 @@
             (local.set $prev (i32.sub (local.get $ptr) (local.get $temp_size)))
             
             ;; temp_next = ptr->next
-            (local.set $temp_next (i32.load (i32.add (local.get $ptr) (i32.const 4))))
+            (local.set $temp_next (i32.load offset=4 (local.get $ptr)))
 
             ;; size += temp_size
             (local.set $size (i32.add (local.get $size) (local.get $temp_size)))
@@ -520,12 +505,11 @@
 
 
             ;; prev->next = temp_next
-            (i32.store (i32.add (local.get $prev) (i32.const 4)) (local.get $temp_next))
+            (i32.store offset=4 (local.get $prev) (local.get $temp_next))
 
             ;; if temp_next != null, temp_next->prev = prev
             (if (i32.ne (i32.const 0) (local.get $temp_next))
-                (i32.store (i32.add (local.get $temp_next)
-                                    (i32.const 8))
+                (i32.store offset=8 (local.get $temp_next)
                            (local.get $prev)))
 
             ;; ptr = prev
@@ -580,9 +564,71 @@
     )
 
     (memory 1)
+    (table 1 funcref)
 
     ;;; Re-export memory to work with the WASI ABI
     (export "memory" (memory 0))
+    (export "table" (table 0))
+
+    ;;; fn rc_create<T>(val: Box<T>, val_len: u32, drop_in_place: tblidx<fn(&mut T)>) -> Rc<T>;
+    ;;; Create an Rc<T> from a boxed `val`. `val_len` MUST equal `sizeof(T)`.
+    ;;; When the refcount is zero, the value is dropped using `drop_in_place`.
+    ;;; `drop_in_place` MUST NOT deallocate the backing memory of T, just
+    ;;; deallocate any owned resources contained inside it.
+    (func $rc_create (param $val i32) (param $val_len i32) (param $drop_in_place i32) (result i32)
+        (local $rc_ptr i32)
+        ;; save space for refcount and tblidx at front
+        (local.set $rc_ptr
+            (call $realloc
+                (local.get $val)
+                (i32.add (local.get $val_len) (i32.const 8))))
+        (call $memcpy
+            (i32.add (local.get $rc_ptr) (i32.const 8))
+            (local.get $rc_ptr)
+            (local.get $val_len))
+        (drop)
+        ;; rc_ptr->rc = 1;
+        (i32.store (local.get $rc_ptr) (i32.const 1))
+        ;; rc_ptr->fnptr = drop_in_place;
+        (i32.store offset=4 (local.get $rc_ptr) (local.get $drop_in_place))
+        (local.get $rc_ptr))
+    
+    ;;; fn rc_get<T>(rc_ptr: Rc<T>) -> &T
+    ;;; Get the value stored in an Rc<T>. It is NOT SAFE to mutate this value.
+    (func $rc_get (param $rc_ptr i32) (result i32)
+        (i32.add (local.get $rc_ptr) (i32.const 8)))
+    
+    ;;; fn rc_acq<T>(rc_ptr: Rc<T>)
+    ;;; Acquire (clone) an Rc<T>. This will increase the refcount by 1.
+    (func $rc_acq (param $rc_ptr i32)
+        (i32.store (local.get $rc_ptr)
+                   (i32.add (i32.const 1)
+                            (i32.load (local.get $rc_ptr)))))
+    
+    ;;; fn rc_rel<T>(rc_ptr: Rc<T>)
+    ;;; Release (drop) an Rc<T>. This will decrease the refcount by 1,
+    ;;; and if needed, drop the value.
+    (func $rc_rel (param $rc_ptr i32)
+        (local $refcount i32)
+        (local.set $refcount (i32.load (local.get $rc_ptr)))
+        (if (i32.eqz (local.get $refcount)) 
+            (block
+                (call $print
+                    (global.get $data_panic_release_rc_at_0_offset)
+                    (global.get $data_panic_release_rc_at_0_size))
+                (drop)
+                (call $proc_exit (i32.const 1))
+                (unreachable)))
+        (local.set $refcount (i32.sub (local.get $refcount) (i32.const 1)))
+        (i32.store (local.get $rc_ptr) (local.get $refcount))
+        (if (i32.eqz (local.get $refcount))
+            (block
+                (call_indirect (type $dropper)
+                               (i32.add (local.get $rc_ptr) (i32.const 8))
+                               (i32.load offset=4 (local.get $rc_ptr)))
+                (call $dealloc (local.get $rc_ptr))
+            ))
+        )
 
     ;; === Helper Functions === ;;
 
@@ -600,9 +646,8 @@
             (local.get $str))
 
         ;; static_ciovec->len = len
-        (i32.store
-            (i32.add
-                (global.get $data_static_ciovec_offset) (i32.const 4))
+        (i32.store offset=4
+            (global.get $data_static_ciovec_offset)
             (local.get $len))
 
         ;; Write the data to stdout
@@ -765,17 +810,34 @@
         (select (local.get $b) (local.get $a)
                 (i32.le_u (local.get $a) (local.get $b))))
 
-    ;;; fn i32s_to_string(num: i32) -> (*mut u8, usize)
-    ;;; Converts a signed integer to a string, allocated on the heap by this
-    ;;; function
-    (func $i32s_to_string (param $num i32) (result i32 i32)
-        (local $buf i32)
+    ;;; fn rem_abs_i32(a: i32, b: i32, signed: bool) -> i32
+    (func $rem_abs_i32 (param $a i32) (param $b i32) (param $signed i32) (result i32)
+        (select
+            (call $i32s_abs (i32.rem_s (local.get $a) (local.get $b)))
+            (i32.rem_u (local.get $a) (local.get $b))
+            (local.get $signed)))
+    
+    ;;; fn div_abs_i32(a: i32, b: i32, signed: bool) -> i32
+    (func $div_abs_i32 (param $a i32) (param $b i32) (param $signed i32) (result i32)
+        (select
+            (call $i32s_abs (i32.div_s (local.get $a) (local.get $b)))
+            (i32.div_u (local.get $a) (local.get $b))
+            (local.get $signed)))
+
+    ;;; fn i32_to_string(num: i32, signed: bool) -> (*mut u8, usize)
+    ;;; Converts a 32-bit integer to a string, allocated on the heap by this
+    ;;; function. `signed` determines whether or not the integer is interpreted
+    ;;; as unsigned or signed.
+    (func $i32_to_string (param $num i32) (param $signed i32) (result i32 i32)
+        (local $buf i32) (local $buf_new i32)
         (local $ptr i32)
         (local $is_negative i32)
         (local $len i32)
 
         ;; Allocate a buffer 11 characters long (the text length of
-        ;; `-2**31 - 1`, the minimum value of an `i32`)
+        ;; `-2**31`, the minimum value of an `i32`)
+        ;; This is big enough for -2**31 = -2147483648 (min i32)
+        ;; and for                 2**32 =  4294967296 (max u32)
         (local.set $buf (call $malloc
             (i32.const 11)))
 
@@ -794,19 +856,16 @@
                 (local.get $ptr)
                 (i32.add
                     (i32.const 0x30) ;; 0x30 - ASCII value of `0`
-                    (call $i32s_abs
-                        (i32.rem_s (local.get $num) (i32.const 10)))))
+                    (call $rem_abs_i32 (local.get $num) (i32.const 10) (local.get $signed))))
             
             ;; Decrement the pointer
             (local.set $ptr
                 (i32.sub (local.get $ptr) (i32.const 1)))
 
-            ;; Divide the number by 10 (signed integer division, not float
-            ;; division) and then compute its absolute value
+            ;; Divide the number by 10 and compute the absolute value
             ;; `num = abs(num / 10)`
             (local.set $num
-                (call $i32s_abs
-                    (i32.div_s (local.get $num) (i32.const 10))))
+                (call $div_abs_i32 (local.get $num) (i32.const 10) (local.get $signed)))
 
             ;; Break if the number is 0
             (br_if $loop_out
@@ -817,7 +876,7 @@
         ))
 
         ;; Add a negative sign if the number was negative
-        (if (local.get $is_negative)
+        (if (i32.and (local.get $is_negative) (local.get $signed))
             (i32.store8
                 (local.get $ptr)
                 (i32.const 0x2d)) ;; 0x2d - ASCII value of `-`
@@ -832,14 +891,23 @@
                 (i32.add (local.get $buf) (i32.const 11))
                 (local.get $ptr)))
 
-        ;; Reallocate buffer to the right length
-        (local.set $buf (call $realloc
-            (local.get $buf)
+        ;; Allocate buffer to the right length
+        (local.set $buf_new (call $malloc
             (local.get $len)))
+        
+        ;; Copy data to new buffer
+        (call $memcpy
+            (local.get $buf_new)
+            (local.get $ptr)
+            (local.get $len))
+        (drop)
+
+        ;; Deallocate old buffer, from start
+        (call $dealloc (local.get $buf))
 
         ;; Return the new buffer and length
         (local.get $len)
-        (local.get $buf)
+        (local.get $buf_new)
     )
 
     ;;; fn memcat(s1: *mut u8, s1_len: usize, s2: *mut u8, s2_len: usize) -> (*mut u8, usize);
@@ -958,7 +1026,7 @@
                                   (local.get $fmt_len))
                         (unreachable))
                     
-                    (local.set $byte_next (i32.load8_u (i32.add (local.get $fmt_ptr) (i32.const 1))))
+                    (local.set $byte_next (i32.load8_u offset=1 (local.get $fmt_ptr)))
 
                     (if (i32.eq (local.get $byte_next) (i32.const 0x25)) ;; 0x25 - `%`
                         (block
@@ -973,7 +1041,7 @@
                                                                                     ;; 8: sizeof(arg)
                                                                                     (i32.const 8))))
                             (local.set $str_ptr (i32.load (local.get $arg_ptr)))
-                            (local.set $str_len (i32.load (i32.add (local.get $arg_ptr) (i32.const 4))))
+                            (local.set $str_len (i32.load offset=4 (local.get $arg_ptr)))
 
                             ;; buf_i + str_len >= buf_len => can't copy this string
                             (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $str_len))
@@ -987,6 +1055,60 @@
                                         (local.get $str_ptr)
                                         (local.get $str_len))
                                     (drop)))
+
+                            (local.set $arg_i (i32.add (local.get $arg_i) (i32.const 1)))
+                            (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 2)))
+                            (local.set $buf_i (i32.add (local.get $buf_i) (local.get $str_len)))
+                            (br $loop)))
+                    (if (i32.eq (local.get $byte_next) (i32.const 0x64)) ;; 0x64 - `d`
+                        (block
+                            (local.set $arg_ptr (i32.add (local.get $args) (i32.mul (local.get $arg_i) (i32.const 8))))
+
+                            (call $i32_to_string (i32.load (local.get $arg_ptr)) (i32.const 1))
+                            (local.set $str_ptr)
+                            (local.set $str_len)
+
+                            ;; buf_i + str_len >= buf_len => can't copy this string
+                            (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $str_len))
+                                          (local.get $buf_len))
+                                (local.set $simulate (i32.const 1)))
+
+                            (if (i32.eqz (local.get $simulate))
+                                (block
+                                    (call $memcpy
+                                        (local.get $buf_ptr)
+                                        (local.get $str_ptr)
+                                        (local.get $str_len))
+                                    (drop)))
+                            
+                            (call $dealloc (local.get $str_ptr))
+
+                            (local.set $arg_i (i32.add (local.get $arg_i) (i32.const 1)))
+                            (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 2)))
+                            (local.set $buf_i (i32.add (local.get $buf_i) (local.get $str_len)))
+                            (br $loop)))
+                    (if (i32.eq (local.get $byte_next) (i32.const 0x75)) ;; 0x75 - `u`
+                        (block
+                            (local.set $arg_ptr (i32.add (local.get $args) (i32.mul (local.get $arg_i) (i32.const 8))))
+
+                            (call $i32_to_string (i32.load (local.get $arg_ptr)) (i32.const 0))
+                            (local.set $str_ptr)
+                            (local.set $str_len)
+
+                            ;; buf_i + str_len >= buf_len => can't copy this string
+                            (if (i32.ge_u (i32.add (local.get $buf_i) (local.get $str_len))
+                                          (local.get $buf_len))
+                                (local.set $simulate (i32.const 1)))
+
+                            (if (i32.eqz (local.get $simulate))
+                                (block
+                                    (call $memcpy
+                                        (local.get $buf_ptr)
+                                        (local.get $str_ptr)
+                                        (local.get $str_len))
+                                    (drop)))
+                            
+                            (call $dealloc (local.get $str_ptr))
 
                             (local.set $arg_i (i32.add (local.get $arg_i) (i32.const 1)))
                             (local.set $fmt_i (i32.add (local.get $fmt_i) (i32.const 2)))
@@ -1065,76 +1187,114 @@
         (local.get $buf)
     )
 
+    ;;; fn printf(fmt: *mut u8, fmt_len: isize, args: *const u8);
+    ;;; Print a formatted string to stdout.
+    ;;; See `snprintf` for more documentation.
+    (func $printf (param $fmt i32) (param $fmt_len i32) (param $args i32)
+        (local $str i32) (local $len i32)
+        (call $sprintf (local.get $fmt) (local.get $fmt_len) (local.get $args))
+        (local.set $str)
+        (local.set $len)
+
+        (call $print (local.get $str) (local.get $len))
+        (drop)
+        
+        (call $dealloc (local.get $str)))
+
     ;; === Start === ;;
 
     (func $main (export "_start")
-        (local $str i32) (local $arg i32) (local $len i32)
+        (local $arg i32) (local $rc i32)
 
         (local.set $arg
-            (call $malloc (i32.const 8)))
+            (call $malloc (i32.const 32)))
         (i32.store (local.get $arg) (global.get $data_str2_offset))
-        (i32.store (i32.add (local.get $arg) (i32.const 4)) (global.get $data_str2_size))
+        (i32.store offset=4 (local.get $arg) (global.get $data_str2_size))
+        (i32.store offset=8 (local.get $arg) (i32.const 4294967295))
+        (i32.store offset=16 (local.get $arg) (i32.const 4294967295))
 
-        (call $sprintf (global.get $data_str3_offset) (global.get $data_str3_size)
-                                        (local.get $arg))
-        (local.set $str)
-        (local.set $len)
-        
-        (call $print (local.get $str) (local.get $len))
-        (drop)
+        (call $printf (global.get $data_str3_offset) (global.get $data_str3_size) (local.get $arg))
 
         (call $dealloc
             (local.get $arg))
-        (call $dealloc
-            (local.get $str))
+
+        (local.set $rc (call $malloc (i32.const 4)))
+        (i32.store (local.get $rc) (i32.const 12345))
+        (local.set $rc (call $rc_create (local.get $rc) (i32.const 4) (global.get $elem_dropper_func)))
+        (call $rc_acq (local.get $rc))
+        (call $rc_rel (local.get $rc))
+        (call $rc_rel (local.get $rc))
+    )
+
+    (func $dropper_func (param $ptr i32)
+        (local $arg i32)
+        (local.set $arg (call $malloc (i32.const 4)))
+        (i32.store (local.get $arg) (i32.load (local.get $ptr)))
+        (call $printf (global.get $data_str4_offset) (global.get $data_str4_size) (local.get $arg))
+        (call $dealloc (local.get $arg))
     )
 
     ;; === Static Data === ;;
 
 ;;DATA BEGIN;;
-    ;;; name: panic_double_free_msg
+    ;;; name: panic_double_dealloc
     ;;; size: 0x18
-    (global $data_panic_double_free_msg_offset i32 (i32.const 0x00))
-    (global $data_panic_double_free_msg_size i32 (i32.const 0x18))
+    (global $data_panic_double_dealloc_offset i32 (i32.const 0x00))
+    (global $data_panic_double_dealloc_size i32 (i32.const 0x18))
     (data (i32.const 0x00) "panic: double dealloc()\n")
+
+    ;;; name: panic_release_rc_at_0
+    ;;; size: 0x35
+    (global $data_panic_release_rc_at_0_offset i32 (i32.const 0x18))
+    (global $data_panic_release_rc_at_0_size i32 (i32.const 0x35))
+    (data (i32.const 0x18) "panic: tried to rc_rel an Rc<T> with a refcount of 0\n")
 
     ;;; name: str1
     ;;; size: 0x0e
-    (global $data_str1_offset i32 (i32.const 0x18))
+    (global $data_str1_offset i32 (i32.const 0x50))
     (global $data_str1_size i32 (i32.const 0x0e))
-    (data (i32.const 0x18) "Hello, world!\n")
+    (data (i32.const 0x50) "Hello, world!\n")
 
     ;;; name: str2
-    ;;; size: 0x10
-    (global $data_str2_offset i32 (i32.const 0x28))
-    (global $data_str2_size i32 (i32.const 0x10))
-    (data (i32.const 0x28) "This is a test!\n")
+    ;;; size: 0x0f
+    (global $data_str2_offset i32 (i32.const 0x60))
+    (global $data_str2_size i32 (i32.const 0x0f))
+    (data (i32.const 0x60) "This is a test!")
 
     ;;; name: str3
-    ;;; size: 0x10
-    (global $data_str3_offset i32 (i32.const 0x38))
-    (global $data_str3_size i32 (i32.const 0x10))
-    (data (i32.const 0x38) "Hello, world! %s")
+    ;;; size: 0x17
+    (global $data_str3_offset i32 (i32.const 0x70))
+    (global $data_str3_size i32 (i32.const 0x17))
+    (data (i32.const 0x70) "Hello, world! %s %d %u\n")
+
+    ;;; name: str4
+    ;;; size: 0x0b
+    (global $data_str4_offset i32 (i32.const 0x88))
+    (global $data_str4_size i32 (i32.const 0x0b))
+    (data (i32.const 0x88) "dropped %u\n")
 
     ;;; name: garbage_u32
     ;;; size: 0x04
-    (global $data_garbage_u32_offset i32 (i32.const 0x48))
+    (global $data_garbage_u32_offset i32 (i32.const 0x94))
     (global $data_garbage_u32_size i32 (i32.const 0x04))
-    (data (i32.const 0x48) "\00\00\00\00")
+    (data (i32.const 0x94) "\00\00\00\00")
 
     ;;; name: static_ciovec
     ;;; size: 0x08
-    (global $data_static_ciovec_offset i32 (i32.const 0x4c))
+    (global $data_static_ciovec_offset i32 (i32.const 0x98))
     (global $data_static_ciovec_size i32 (i32.const 0x08))
-    (data (i32.const 0x4c) "\00\00\00\00\00\00\00\00")
+    (data (i32.const 0x98) "\00\00\00\00\00\00\00\00")
 
     ;;; name: garbage_v128
     ;;; size: 0x10
-    (global $data_garbage_v128_offset i32 (i32.const 0x54))
+    (global $data_garbage_v128_offset i32 (i32.const 0xa0))
     (global $data_garbage_v128_size i32 (i32.const 0x10))
-    (data (i32.const 0x54) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
+    (data (i32.const 0xa0) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
 
-    (global $data_end i32 (i32.const 0x64))
+    (global $data_end i32 (i32.const 0xb0))
+
+    (global $elem_dropper_func i32 (i32.const 0))
+    (elem (i32.const 0) $dropper_func)
 ;;DATA END;;
 
     (global $heap_base i32 (i32.const 0x100))

@@ -12,14 +12,12 @@ command = "cargo"
 args = [
     "run",
     "-p", "wat-datagen",
-    "--", "knight.wat", "@@split(DATA_PATH,;)"
+    "--", "knight.wat", "elems.dat", "@@split(DATA_PATH,;)"
 ]
 
 [tasks.build-wat]
 command = "wat2wasm"
 args = [
-    "--enable-bulk-memory",
-    "--enable-simd",
     "--debug-names",
     "knight.wat", "-o", "knight.wasm"
 ]
