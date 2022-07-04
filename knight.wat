@@ -17,9 +17,6 @@
     ;;; the environment.
     (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
 
-    ;;; type dropper = fn(ptr: *const ());
-    (type $dropper (func (param i32)))
-
     ;; === Memory Allocation === ;;
 
     ;;; some notes about the algorithm:
@@ -570,6 +567,11 @@
     (export "memory" (memory 0))
     (export "table" (table 0))
 
+    ;; === Reference Counting === ;;
+
+    ;;; type dropper = fn(ptr: *const ());
+    (type $dropper (func (param i32)))
+
     ;;; fn rc_create<T>(val: Box<T>, val_len: u32, drop_in_place: tblidx<fn(&mut T)>) -> Rc<T>;
     ;;; Create an Rc<T> from a boxed `val`. `val_len` MUST equal `sizeof(T)`.
     ;;; When the refcount is zero, the value is dropped using `drop_in_place`.
@@ -632,38 +634,7 @@
 
     ;; === Helper Functions === ;;
 
-    ;;; fn print(str: *const u8, len: u32) -> errno;
-    ;;; Print a string to stdout.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `str` must be a valid, well-aligned pointer to a valid UTF-8 string
-    ;;; - `str` must point to valid data up to an offset of `n` bytes
-    (func $print (param $str i32) (param $len i32) (result i32)
-        ;; static_ciovec->str = str
-        (i32.store
-            (global.get $data_static_ciovec_offset)
-            (local.get $str))
-
-        ;; static_ciovec->len = len
-        (i32.store offset=4
-            (global.get $data_static_ciovec_offset)
-            (local.get $len))
-
-        ;; Write the data to stdout
-        (call $fd_write
-            (i32.const 1)
-            ;; This is a static ciovec used only for this function and other functions that just need a single ciovec.
-            ;; While yes, static mutable things are generally bad, we're working on one thread. Guaranteed.
-            ;;   (Like, we don't even  have atomics *enabled* guaranteed.) So it doesn't matter.
-            ;; And we don't care if other functions clobber our data afterwards, as we only need
-            ;;  this for the duration of this fd_write call.
-            (global.get $data_static_ciovec_offset)
-            (i32.const 1)
-            ;; We use the `garbage_u32` for n_written as we need a valid pointer, but we don't care about the data.
-            ;; and garbage_u32 is just for this purpose: useless data that's only written, never read.
-            (global.get $data_garbage_u32_offset))
-    )
+    ;; === Memory Helpers === ;;
 
     ;;; fn __memcmp_fast(s1: *const u8, s2: *const u8, n: usize, n_fast: usize, n_slow: usize) -> i32;
     ;;; memcmp fast path (uses SIMD)
@@ -789,6 +760,43 @@
         (local.get $s)
     )
 
+    ;;; fn memcat(s1: *mut u8, s1_len: usize, s2: *mut u8, s2_len: usize) -> (*mut u8, usize);
+    ;;; Concatenate two buffers into a new buffer. The new buffer will be realloc()'d from the first buffer.
+    ;;; The function returns the new buffer's pointer and the new length.
+    ;;;
+    ;;; # Safety
+    ;;;
+    ;;; - `s1` and `s2` must be valid, well-aligned pointers
+    ;;; - `s1` must point to valid data up to an offset of `s1_len` bytes
+    ;;; - `s2` must point to valid data up to an offset of `s1_len` bytes
+    (func $memcat (param $s1 i32) (param $s1_len i32) (param $s2 i32) (param $s2_len i32) (result i32 i32)
+        (local $buf i32) (local $len i32)
+        
+        ;; Calculate combined length
+        (local.set $len
+            (i32.add (local.get $s1_len) (local.get $s2_len)))
+
+        ;; Grow buffer to sufficient length
+        (local.set $buf (call $realloc
+            (local.get $s1)
+            (local.get $len)))
+        
+        ;; Copy second buffer
+        ;; memcpy(buf + s1_len, s2, s2_len)
+        (call $memcpy
+            (i32.add
+                (local.get $buf) (local.get $s1_len))
+            (local.get $s2)
+            (local.get $s2_len))
+        (drop)
+        
+        ;; Return buffer and length
+        (local.get $len)
+        (local.get $buf)
+    )
+
+    ;; === Numerics === ;;
+
     ;;; fn i32s_abs(num: i32) -> i32
     ;;; Computes the absolute value of a signed i32. May overflow.
     (func $i32s_abs (param $num i32) (result i32)
@@ -910,39 +918,39 @@
         (local.get $buf_new)
     )
 
-    ;;; fn memcat(s1: *mut u8, s1_len: usize, s2: *mut u8, s2_len: usize) -> (*mut u8, usize);
-    ;;; Concatenate two buffers into a new buffer. The new buffer will be realloc()'d from the first buffer.
-    ;;; The function returns the new buffer's pointer and the new length.
+    ;; === printf & co. === ;;
+
+    ;;; fn print(str: *const u8, len: u32) -> errno;
+    ;;; Print a string to stdout.
     ;;;
     ;;; # Safety
     ;;;
-    ;;; - `s1` and `s2` must be valid, well-aligned pointers
-    ;;; - `s1` must point to valid data up to an offset of `s1_len` bytes
-    ;;; - `s2` must point to valid data up to an offset of `s1_len` bytes
-    (func $memcat (param $s1 i32) (param $s1_len i32) (param $s2 i32) (param $s2_len i32) (result i32 i32)
-        (local $buf i32) (local $len i32)
-        
-        ;; Calculate combined length
-        (local.set $len
-            (i32.add (local.get $s1_len) (local.get $s2_len)))
+    ;;; - `str` must be a valid, well-aligned pointer to a valid UTF-8 string
+    ;;; - `str` must point to valid data up to an offset of `n` bytes
+    (func $print (param $str i32) (param $len i32) (result i32)
+        ;; static_ciovec->str = str
+        (i32.store
+            (global.get $data_static_ciovec_offset)
+            (local.get $str))
 
-        ;; Grow buffer to sufficient length
-        (local.set $buf (call $realloc
-            (local.get $s1)
-            (local.get $len)))
-        
-        ;; Copy second buffer
-        ;; memcpy(buf + s1_len, s2, s2_len)
-        (call $memcpy
-            (i32.add
-                (local.get $buf) (local.get $s1_len))
-            (local.get $s2)
-            (local.get $s2_len))
-        (drop)
-        
-        ;; Return buffer and length
-        (local.get $len)
-        (local.get $buf)
+        ;; static_ciovec->len = len
+        (i32.store offset=4
+            (global.get $data_static_ciovec_offset)
+            (local.get $len))
+
+        ;; Write the data to stdout
+        (call $fd_write
+            (i32.const 1)
+            ;; This is a static ciovec used only for this function and other functions that just need a single ciovec.
+            ;; While yes, static mutable things are generally bad, we're working on one thread. Guaranteed.
+            ;;   (Like, we don't even  have atomics *enabled* guaranteed.) So it doesn't matter.
+            ;; And we don't care if other functions clobber our data afterwards, as we only need
+            ;;  this for the duration of this fd_write call.
+            (global.get $data_static_ciovec_offset)
+            (i32.const 1)
+            ;; We use the `garbage_u32` for n_written as we need a valid pointer, but we don't care about the data.
+            ;; and garbage_u32 is just for this purpose: useless data that's only written, never read.
+            (global.get $data_garbage_u32_offset))
     )
 
     ;;; fn snprintf(
