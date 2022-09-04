@@ -1,85 +1,89 @@
 (module
     ;; === WASI Imports === ;;
 
-    ;;; fn fd_write(
-    ;;;     fd: u32,
-    ;;;     ciovecs: *const ciovec,
-    ;;;     n_ciovecs: u32,
-    ;;;     n_written: *mut usize
-    ;;; ) -> errno;
-    ;;; Write to a file descriptor.
-    ;;; Note: this is similar to `writev` in POSIX.
+    ;; fn fd_write( fd: u32, ciovecs: *const ciovec, n_ciovecs: u32, n_written:
+    ;;     *mut usize ) -> errno;
+    ;;
+    ;; Write to a file descriptor. Note: this is similar to `writev` in POSIX.
     (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
 
-    ;;; fn proc_exit(code: u32) -> !;
-    ;;; Terminate the process normally. An exit code of 0 indicates successful
-    ;;; termination of the program. The meanings of other values is dependent on
-    ;;; the environment.
+    ;; fn proc_exit(code: u32) -> !;
+    ;;
+    ;; Terminate the process normally. An exit code of 0 indicates successful
+    ;; termination of the program. The meanings of other values is dependent on
+    ;; the environment.
     (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
 
     ;; === Memory Allocation === ;;
 
-    ;;; some notes about the algorithm:
-    ;;;
-    ;;; explicit free list style
-    ;;;
-    ;;; alloc'd memory block:
-    ;;; struct {
-    ;;;  size: u32,
-    ;;;  payload/padding: [u8; size]
-    ;;;  boundary_size: u32,
-    ;;; }
-    ;;;
-    ;;; free block:
-    ;;; basically the same, except payload is:
-    ;;; next: *mut u8
-    ;;; prev: *mut u8
-    ;;; padding: [u8; size - 2*sizeof(*mut u8)]
-    ;;;
-    ;;; doubly-linked (free) list
-    ;;; frankly, i'm not sure if this even *needs* to be a doubly-linked list but i started that way and i'm
-    ;;;  not gonna change it now since it doesn't really matter
-    ;;; insertion policy: address-ordered (insert free blocks as such: addr(prev) < addr(curr) < addr(next))
-    ;;; free() is max of O(n) where n is # of free blocks but that's fine
-    ;;;
-    ;;; malloc:
-    ;;; - size = round up size to nearest multiple of 4
-    ;;; - size = size + (2*i32 for meta)
-    ;;; - find block (best-fit?)
-    ;;; - split it
-    ;;; - splice it out of the free list
-    ;;; - return ptr
-    ;;;
-    ;;; best-fit:
-    ;;; - search free list
-    ;;; - find block with fewest remaining bytes
-    ;;;
-    ;;; free:
-    ;;; - find block
-    ;;; - find size
-    ;;; - put it in the free list
-    ;;; - coalesce
-    ;;;
-    ;;; alignment is in multiples of 4 for the purposes of ease-of-use
-    ;;; means we can use UInt32Array if we need to, and means we can actually use a bit for "is this block free?" within the size tag
-    ;;; this is useful for coalescing so the algorithm doesn't have to traverse the entire free list too many times and compare addresses
-    ;;;  and stuff like that which can be fallible
-    ;;; it also means we can trap double frees.
-    ;;; thus, we don't waste space but still retain the usefulness of having explicit free lists and not an implicit one
-    ;;; i'm too lazy to do something fancy like seglists or RBtree-based allocators, so this is the best option, tbh.
+    ;; some notes about the algorithm:
+    ;;
+    ;; explicit free list style
+    ;;
+    ;; alloc'd memory block:
+    ;; struct {
+    ;;  size: u32,
+    ;;  payload/padding: [u8; size]
+    ;;  boundary_size: u32,
+    ;; }
+    ;;
+    ;; free block:
+    ;; basically the same, except payload is:
+    ;; next: *mut u8
+    ;; prev: *mut u8
+    ;; padding: [u8; size - 2*sizeof(*mut u8)]
+    ;;
+    ;; doubly-linked (free) list frankly, i'm not sure if this even *needs* to
+    ;; be a doubly-linked list but i started that way and i'm not gonna change
+    ;; it now since it doesn't really matter insertion policy: address-ordered
+    ;; (insert free blocks as such: addr(prev) < addr(curr) < addr(next)) free()
+    ;; is max of O(n) where n is # of free blocks but that's fine
+    ;;
+    ;; malloc:
+    ;; - size = round up size to nearest multiple of 4
+    ;; - size = size + (2*i32 for meta)
+    ;; - find block (best-fit?)
+    ;; - split it
+    ;; - splice it out of the free list
+    ;; - return ptr
+    ;;
+    ;; best-fit:
+    ;; - search free list
+    ;; - find block with fewest remaining bytes
+    ;;
+    ;; free:
+    ;; - find block
+    ;; - find size
+    ;; - put it in the free list
+    ;; - coalesce
+    ;;
+
+    ;; alignment is in multiples of 4 for the purposes of ease-of-use; this
+    ;; means we can use UInt32Array if we need to, and means we can actually use
+    ;; a bit for "is this block free?" within the size tag.
+    ;;
+    ;; this is useful for coalescing so the algorithm doesn't have to traverse
+    ;; the entire free list too many times and compare addresses and stuff like
+    ;; that which can be fallible it also means we can trap double frees. thus,
+    ;; we don't waste space but still retain the usefulness of having explicit
+    ;; free lists and not an implicit one.
+    ;;
+    ;; i'm too lazy to do something fancy like seglists or RBtree-based
+    ;; allocators, so this is the best option, tbh.
     
-    ;;; fn malloc(size: usize) -> *mut u8;
-    ;;; Allocate a block of memory.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `size`, when rounded up to the nearest multiple of 4, must not be zero
-    ;;; - `size`, when rounded up to the nearest multiple of 4, must not overflow
-    ;;; - the allocated block of memory may or may not be initialized
-    ;;;
-    ;;; # Errors
-    ;;;
-    ;;; A null pointer indicates that memory could not be allocated.
+    ;; fn malloc(size: usize) -> *mut u8;
+    ;;
+    ;; Allocate a block of memory.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `size`, when rounded up to the nearest multiple of 4, must not be zero
+    ;; - `size`, when rounded up to the nearest multiple of 4, must not overflow
+    ;; - the allocated block of memory may or may not be initialized
+    ;;
+    ;; # Errors
+    ;;
+    ;; A null pointer indicates that memory could not be allocated.
     (func $malloc (param $size i32) (result i32)
         (local $actual_size i32) (local $ptr i32)
         ;; traverse list loop
@@ -88,7 +92,8 @@
         ;; splitting/splicing blocks
         (local $temp_next i32) (local $temp_prev i32) (local $next_size i32)
         
-        ;; Round up $size to the nearest multiple of 4 (alignment), which is 2^2 so we can use a power of 2 optimization
+        ;; Round up $size to the nearest multiple of 4 (alignment), which is 2^2
+        ;; so we can use a power of 2 optimization
         ;; (https://stackoverflow.com/a/9194117/5460075)
         ;; (numToRound + multiple - 1) & -multiple
         ;; == (numToRound + 4 - 1) & -4
@@ -104,8 +109,8 @@
         (local.set $actual_size
             (i32.add (local.get $size) (i32.const 8)))
 
-        ;; we make sure that the size is at least 16 as we need at least
-        ;; 16 bytes for the free block, thus that's our minimum block size.
+        ;; we make sure that the size is at least 16 as we need at least 16
+        ;; bytes for the free block, thus that's our minimum block size.
         (local.set $actual_size
             (call $i32u_max
                 (local.get $actual_size)
@@ -122,16 +127,19 @@
             (if (i32.eqz (local.get $next)) (block
                 (if (i32.eqz (local.get $best_size))
                     (block
-                        ;; Our best block was not found, i.e. there wasn't a block large enough.
-                        ;; This means we need to make a new block, which potentially means expanding the memory.
+                        ;; Our best block was not found, i.e. there wasn't a
+                        ;; block large enough. This means we need to make a new
+                        ;; block, which potentially means expanding the memory.
 
-                        ;; We use heap_base->prev to be the beginning of the first unmanaged section.
+                        ;; We use heap_base->prev to be the beginning of the
+                        ;; first unmanaged section.
                         ;; next = heap_base->prev
                         (local.set $next
                             (i32.load offset=8 (global.get $heap_base)))
 
                         (local.set $memsize
-                            ;; memory.size works in page units, each page is 64 KiB (65536 bytes)
+                            ;; memory.size works in page units, each page is 64
+                            ;; KiB (65536 bytes)
                             (i32.mul (i32.const 65536) (memory.size)))
                         
 
@@ -141,15 +149,20 @@
                             (block
                                 ;; We need to grow the memory.
 
-                                ;; Round up to the nearest multiple of 65536 (which is 2^16, so we can use a power of two optimization)
-                                ;; Then divide to get the page delta.
+                                ;; Round up to the nearest multiple of 65536
+                                ;; (which is 2^16, so we can use a power of two
+                                ;; optimization) Then divide to get the page
+                                ;; delta.
                                 ;; (https://stackoverflow.com/a/9194117/5460075)
                                 ;; (numToRound + multiple - 1) & -multiple
                                 ;; == (numToRound + 65536 - 1) & -65536
                                 ;; == (numToRound + 65535) & -65536
 
-                                ;; TODO: review this. It seems janky but works, but it'll probably alloc more than we need in some rare cases.
-                                ;; we probably want to check based on actual_size - (memsize - next), not just actual_size but I'll have to look later
+                                ;; TODO: review this. It seems janky but works,
+                                ;; but it'll probably alloc more than we need in
+                                ;; some rare cases. we probably want to check
+                                ;; based on actual_size - (memsize - next), not
+                                ;; just actual_size but I'll have to look later
                                 (local.set $memdelta (i32.div_u 
                                     (i32.and
                                         (i32.add (i32.sub (local.get $actual_size)
@@ -169,23 +182,27 @@
                                             (i32.sub (local.get $actual_size) (i32.const 4)))
                                     (local.get $actual_size))
                         
-                        ;; We have our new block. We don't need to splice this out of the free list as it wasn't in it, anyway.
-                        ;; But we do need to mark where the heap ends now so we properly allocate next time.
+                        ;; We have our new block. We don't need to splice this
+                        ;; out of the free list as it wasn't in it, anyway. But
+                        ;; we do need to mark where the heap ends now so we
+                        ;; properly allocate next time.
                         ;; heap_base->prev = next + actual_size;
                         (i32.store offset=8 (global.get $heap_base)
                                    (i32.add (local.get $next) (local.get $actual_size)))
 
-                        ;; But we don't want our caller to overwrite our precious size metadata
-                        ;; (as for overruns, there's not much we can do about that), so we add 4 to the pointer (sizeof(u32)).
+                        ;; But we don't want our caller to overwrite our
+                        ;; precious size metadata (as for overruns, there's not
+                        ;; much we can do about that), so we add 4 to the
+                        ;; pointer (sizeof(u32)).
                         (return (i32.add (local.get $next) (i32.const 4)))
                     )
-                    ;; Our best block was found.
-                    ;; But $best_ptr should already be set so we just need to get out of this loop.
+                    ;; Our best block was found. But $best_ptr should already be
+                    ;; set so we just need to get out of this loop.
                     (br $loop_out))
             ))
 
-            ;; the LSB of the size is the "is free" bit, so we need to take that out.
-            ;; we can AND ~1 to clear that bit
+            ;; the LSB of the size is the "is free" bit, so we need to take that
+            ;; out. we can AND ~1 to clear that bit
             ;; N.B. ~1 = -2 with two's complement
             (local.set $curr_size (i32.and (i32.load (local.get $next)) (i32.const -2)))
             (if (i32.and
@@ -201,10 +218,9 @@
             (br $loop)
         ))
 
-        ;; split the block, iff best_size - actual_size >= 16
-        ;; (minimum block size, including metadata & padding)
-        ;; otherwise it's not worth splitting because it wouldn't even
-        ;;  be a valid free block.
+        ;; split the block, iff best_size - actual_size >= 16 (minimum block
+        ;; size, including metadata & padding) otherwise it's not worth
+        ;; splitting because it wouldn't even be a valid free block.
         (if (i32.ge_u (i32.sub (local.get $best_size)
                                (local.get $actual_size))
                       (i32.const 16))
@@ -215,8 +231,8 @@
                 (local.set $next_size (i32.sub (local.get $best_size)
                                                (local.get $actual_size)))
 
-                ;; save best_ptr->next and best_ptr->prev
-                ;; (in case boundary_size of either next or best_ptr occupy that space)
+                ;; save best_ptr->next and best_ptr->prev (in case boundary_size
+                ;; of either next or best_ptr occupy that space)
                 
                 ;; temp_next = best_ptr->next
                 (local.set $temp_next
@@ -299,19 +315,20 @@
         (unreachable)
     )
 
-    ;;; fn dealloc(ptr: *mut u8)
-    ;;; Deallocate a block of memory.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `ptr` must be a pointer to a block of memory currently allocated
+    ;; fn dealloc(ptr: *mut u8)
+    ;;
+    ;; Deallocate a block of memory.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `ptr` must be a pointer to a block of memory currently allocated
     (func $dealloc (param $ptr i32)
         (local $size i32)
         ;; traverse list loop
         (local $traverse_ptr i32) (local $next i32) (local $temp i32)
 
-        ;; Our pointer starts at the beginning of the usable data.
-        ;; We need it to start at the size tag.
+        ;; Our pointer starts at the beginning of the usable data. We need it to
+        ;; start at the size tag.
         (local.set $ptr (i32.sub (local.get $ptr) (i32.const 4)))
 
         ;; size = ptr->size
@@ -333,7 +350,8 @@
             (local.set $next
                 (i32.load offset=4 (local.get $traverse_ptr)))
             
-            ;; if next == 0 then we need to add this to the list, not splice it in.
+            ;; if next == 0 then we need to add this to the list, not splice it
+            ;; in.
             (if (i32.eqz (local.get $next))
                 (block
                     ;; add to list
@@ -367,9 +385,8 @@
                 )
             )
 
-            ;; if next > ptr, then we've found the right spot
-            ;; (because of our address ordering invariant)
-            ;; so we need to splice the block in.
+            ;; if next > ptr, then we've found the right spot (because of our
+            ;; address ordering invariant) so we need to splice the block in.
             (if (i32.gt_u (local.get $next)
                           (local.get $ptr))
                 (block
@@ -415,10 +432,12 @@
         )
     )
 
-    ;;; __coalesce(ptr: *mut u8)
-    ;;; !!!INTERNAL, DO NOT USE!!!
-    ;;; This ALMOST CERTAINLY WILL corrupt your heap.
-    ;;; free() coalescing.
+    ;; __coalesce(ptr: *mut u8)
+    ;;
+    ;; !!!INTERNAL, DO NOT USE!!!
+    ;; This ALMOST CERTAINLY WILL corrupt your heap.
+    ;; 
+    ;; free() coalescing.
     (func $__coalesce (param $ptr i32)
         ;; $forward_loop
         (local $next i32) (local $size i32)
@@ -427,9 +446,9 @@
         (local $prev i32) (local $boundary_ptr i32)
         (local $temp_prev i32) (local $temp_size i32)
 
-        ;; clear free bit
-        ;; this will always be here as we've ensured that this block is free.
-        ;; if someone calls this somehow elsewhere, that's their loss.
+        ;; clear free bit this will always be here as we've ensured that this
+        ;; block is free. if someone calls this somehow elsewhere, that's their
+        ;; loss.
         ;; size = ptr->size & -2;
         (local.set $size (i32.and (i32.load (local.get $ptr))
                                   (i32.const -2)))
@@ -517,21 +536,25 @@
     )
 
 
-    ;;; fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
-    ;;; Shrink or grow a block of memory to the given `new_size`.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `new_size`, when rounded up to the nearest multiple of 4, must not be zero
-    ;;; - `new_size`, when rounded up to the nearest multiple of 4, must not overflow
-    ;;; - `ptr` must be a pointer to a block of memory currently allocated
-    ;;;
-    ;;; # Errors
-    ;;;
-    ;;; This function will return a null pointer if the reallocation failed.
-    ;;; However, the old block is still valid in this case.
-    ;; TODO: this could be rewritten knowing the malloc internals, in such a
-    ;;  way that it would be more efficient when we can just expand/split the current block.
+    ;; fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
+    ;;
+    ;; Shrink or grow a block of memory to the given `new_size`.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `new_size`, when rounded up to the nearest multiple of 4, must not be
+    ;;   zero
+    ;; - `new_size`, when rounded up to the nearest multiple of 4, must not
+    ;;   overflow
+    ;; - `ptr` must be a pointer to a block of memory currently allocated
+    ;;
+    ;; # Errors
+    ;;
+    ;; This function will return a null pointer if the reallocation failed.
+    ;; However, the old block is still valid in this case.
+    ;; TODO: this could be rewritten knowing the malloc internals, in such a way
+    ;;  that it would be more efficient when we can just expand/split the
+    ;;  current block.
     (func $realloc (param $ptr i32) (param $new_size i32) (result i32)
         (local $new_ptr i32) (local $old_size i32)
         
@@ -563,26 +586,28 @@
     (memory 1)
     (table 1 funcref)
 
-    ;;; Re-export memory to work with the WASI ABI
+    ;; Re-export memory to work with the WASI ABI
     (export "memory" (memory 0))
     (export "table" (table 0))
 
     ;; === Reference Counting === ;;
 
-    ;;; type dropper = fn(ptr: *const ());
+    ;; type dropper = fn(ptr: *const ());
     (type $dropper (func (param i32)))
 
-    ;;; fn rc_create<T>(val: Box<T>, val_len: u32, drop_in_place: tblidx<fn(&mut T)>) -> Rc<T>;
-    ;;; Create an Rc<T> from a boxed `val`. `val_len` MUST equal `sizeof(T)`.
-    ;;; When the refcount is zero, the value is dropped using `drop_in_place`.
-    ;;; `drop_in_place` MUST NOT deallocate the backing memory of T, just
-    ;;; deallocate any owned resources contained inside it.
-    (func $rc_create (param $val i32) (param $val_len i32) (param $drop_in_place i32) (result i32)
+    ;; fn rc_create<T>(val_len: u32, drop_in_place: tblidx<fn(&mut T)>) -> Rc<T>
+    ;;
+    ;; Create an Rc<T>. This function allocates space for the data based on
+    ;; `val_len`, which MUST equal `sizeof(T)`.
+    ;;
+    ;; When the refcount is zero, the value is dropped using `drop_in_place`.
+    ;; `drop_in_place` MUST NOT deallocate the backing memory of T, just
+    ;; deallocate any owned resources contained inside it.
+    (func $rc_create (param $val_len i32) (param $drop_in_place i32) (result i32)
         (local $rc_ptr i32)
         ;; save space for refcount and tblidx at front
         (local.set $rc_ptr
-            (call $realloc
-                (local.get $val)
+            (call $malloc
                 (i32.add (local.get $val_len) (i32.const 8))))
         (call $memcpy
             (i32.add (local.get $rc_ptr) (i32.const 8))
@@ -595,21 +620,25 @@
         (i32.store offset=4 (local.get $rc_ptr) (local.get $drop_in_place))
         (local.get $rc_ptr))
     
-    ;;; fn rc_get<T>(rc_ptr: Rc<T>) -> &T
-    ;;; Get the value stored in an Rc<T>. It is NOT SAFE to mutate this value.
+    ;; fn rc_get<T>(rc_ptr: Rc<T>) -> &T
+    ;;
+    ;; Get the value stored in an Rc<T>. It is NOT SAFE to mutate this value
+    ;; if the refcount is not equal to 1.
     (func $rc_get (param $rc_ptr i32) (result i32)
         (i32.add (local.get $rc_ptr) (i32.const 8)))
     
-    ;;; fn rc_acq<T>(rc_ptr: Rc<T>)
-    ;;; Acquire (clone) an Rc<T>. This will increase the refcount by 1.
+    ;; fn rc_acq<T>(rc_ptr: Rc<T>)
+    ;;
+    ;; Acquire (clone) an Rc<T>. This will increase the refcount by 1.
     (func $rc_acq (param $rc_ptr i32)
         (i32.store (local.get $rc_ptr)
                    (i32.add (i32.const 1)
                             (i32.load (local.get $rc_ptr)))))
     
-    ;;; fn rc_rel<T>(rc_ptr: Rc<T>)
-    ;;; Release (drop) an Rc<T>. This will decrease the refcount by 1,
-    ;;; and if needed, drop the value.
+    ;; fn rc_rel<T>(rc_ptr: Rc<T>)
+    ;;
+    ;; Release (drop) an Rc<T>. This will decrease the refcount by 1, and if
+    ;; needed, drop the value.
     (func $rc_rel (param $rc_ptr i32)
         (local $refcount i32)
         (local.set $refcount (i32.load (local.get $rc_ptr)))
@@ -631,14 +660,21 @@
                 (call $dealloc (local.get $rc_ptr))
             ))
         )
-
+    ;; fn rc_get_refcount<T>(rc_ptr: Rc<T>) -> usize;
+    ;;
+    ;; Get the reference count of a Rc<T>.
+    (func $rc_get_refcount (param $rc_ptr i32) (result i32)
+        (i32.load (local.get $rc_ptr)))
     ;; === Helper Functions === ;;
 
     ;; === Memory Helpers === ;;
 
-    ;;; fn __memcmp_fast(s1: *const u8, s2: *const u8, n: usize, n_fast: usize, n_slow: usize) -> i32;
-    ;;; memcmp fast path (uses SIMD)
-    ;;; Do not use directly, just use memcmp.
+    ;; fn __memcmp_fast(s1: *const u8, s2: *const u8, n: usize, n_fast: usize,
+    ;; n_slow: usize) -> i32;
+    ;;
+    ;; memcmp fast path (uses SIMD)
+    ;;
+    ;; Do not use directly, just use memcmp.
     (func $__memcmp_fast (param $s1 i32) (param $s2 i32) (param $n i32)
                        (param $n_fast i32) (param $n_slow i32) (result i32)
         (local $v v128) (local $tmp_ptr i32)
@@ -673,9 +709,11 @@
         (unreachable)
     )
 
-    ;;; fn __memcmp_slow(s1: *const u8, s2: *const u8, n: usize) -> i32;
-    ;;; memcmp slow path (cannot use SIMD as n < 16)
-    ;;; Do not use directly, just use memcmp.
+    ;; fn __memcmp_slow(s1: *const u8, s2: *const u8, n: usize) -> i32;
+    ;;
+    ;; memcmp slow path (cannot use SIMD as n < 16)
+    ;;
+    ;; Do not use directly, just use memcmp.
     (func $__memcmp_slow (param $s1 i32) (param $s2 i32) (param $n i32) (result i32)
         (local $x i32)
 
@@ -698,13 +736,14 @@
         (i32.const 0)
     )
 
-    ;;; fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32;
-    ;;; This function emulates libc's memcmp.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `s1` and `s2` must be valid well-aligned pointers
-    ;;; - `s1` and `s2` must point to valid data up to an offset of `n` bytes
+    ;; fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32;
+    ;;
+    ;; This function emulates libc's memcmp.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `s1` and `s2` must be valid well-aligned pointers
+    ;; - `s1` and `s2` must point to valid data up to an offset of `n` bytes
     (func $memcmp (param $s1 i32) (param $s2 i32) (param $n i32) (result i32)
         ;; if s1 == s2, then the result is always `0` (equal)
         (if (i32.eq
@@ -720,13 +759,14 @@
         (unreachable)
     )
 
-    ;;; fn memcpy(dest: *const u8, src: *const u8, n: usize) -> *mut u8;
-    ;;; This function emulates libc's memcpy. The returned buffer is just `dest`.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `dest` and `src` must be valid well-aligned pointers
-    ;;; - `dest` and `src` must point to valid data up to an offset of `n` bytes
+    ;; fn memcpy(dest: *const u8, src: *const u8, n: usize) -> *mut u8;
+    ;;
+    ;; This function emulates libc's memcpy. The returned buffer is just `dest`.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `dest` and `src` must be valid well-aligned pointers
+    ;; - `dest` and `src` must point to valid data up to an offset of `n` bytes
     (func $memcpy (param $dest i32) (param $src i32) (param $n i32) (result i32)
         (memory.copy
             (local.get $dest)
@@ -735,8 +775,9 @@
         (local.get $dest)
     )
     
-    ;;; fn memdup(src: *const u8, size: usize) -> *mut u8;
-    ;;; This function copies the data from `src` to a newly allocated buffer.
+    ;; fn memdup(src: *const u8, size: usize) -> *mut u8;
+    ;;
+    ;; This function copies the data from `src` to a newly allocated buffer.
     (func $memdup (param $src i32) (param $size i32) (result i32)
         (call $memcpy
             (call $malloc (local.get $size))
@@ -744,13 +785,14 @@
             (local.get $size))
     )
 
-    ;;; fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8;
-    ;;; This function emulates libc's memset. The returned buffer is just `s`.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `s` must be a valid and well-aligned pointer
-    ;;; - `s` must point to valid data up to an offset of `n` bytes
+    ;; fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8;
+    ;;
+    ;; This function emulates libc's memset. The returned buffer is just `s`.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `s` must be a valid and well-aligned pointer
+    ;; - `s` must point to valid data up to an offset of `n` bytes
     (func $memset (param $s i32) (param $c i32) (param $n i32) (result i32)
         ;; memory.fill acts like memseet
         (memory.fill
@@ -760,15 +802,18 @@
         (local.get $s)
     )
 
-    ;;; fn memcat(s1: *mut u8, s1_len: usize, s2: *mut u8, s2_len: usize) -> (*mut u8, usize);
-    ;;; Concatenate two buffers into a new buffer. The new buffer will be realloc()'d from the first buffer.
-    ;;; The function returns the new buffer's pointer and the new length.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `s1` and `s2` must be valid, well-aligned pointers
-    ;;; - `s1` must point to valid data up to an offset of `s1_len` bytes
-    ;;; - `s2` must point to valid data up to an offset of `s1_len` bytes
+    ;; fn memcat(s1: *mut u8, s1_len: usize, s2: *mut u8, s2_len: usize) ->
+    ;; (*mut u8, usize);
+    ;;
+    ;; Concatenate two buffers into a new buffer. The new buffer will be
+    ;; realloc()'d from the first buffer. The function returns the new buffer's
+    ;; pointer and the new length.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `s1` and `s2` must be valid, well-aligned pointers
+    ;; - `s1` must point to valid data up to an offset of `s1_len` bytes
+    ;; - `s2` must point to valid data up to an offset of `s1_len` bytes
     (func $memcat (param $s1 i32) (param $s1_len i32) (param $s2 i32) (param $s2_len i32) (result i32 i32)
         (local $buf i32) (local $len i32)
         
@@ -797,8 +842,9 @@
 
     ;; === Numerics === ;;
 
-    ;;; fn i32s_abs(num: i32) -> i32
-    ;;; Computes the absolute value of a signed i32. May overflow.
+    ;; fn i32s_abs(num: i32) -> i32
+    ;;
+    ;; Computes the absolute value of a signed i32. May overflow.
     (func $i32s_abs (param $num i32) (result i32)
         (if (i32.lt_s (local.get $num) (i32.const 0))
             (return (i32.mul (local.get $num) (i32.const -1)))
@@ -806,36 +852,39 @@
         (unreachable)
     )
 
-    ;;; fn i32u_min(a: i32, b: i32) -> i32
-    ;;; Returns the (unsigned) minimum of a and b.
+    ;; fn i32u_min(a: i32, b: i32) -> i32
+    ;;
+    ;; Returns the (unsigned) minimum of a and b.
     (func $i32u_min (param $a i32) (param $b i32) (result i32)
         (select (local.get $a) (local.get $b)
                 (i32.le_u (local.get $a) (local.get $b))))
 
-    ;;; fn i32u_max(a: i32, b: i32) -> i32
-    ;;; Returns the (unsigned) maximum of a and b.
+    ;; fn i32u_max(a: i32, b: i32) -> i32
+    ;;
+    ;; Returns the (unsigned) maximum of a and b.
     (func $i32u_max (param $a i32) (param $b i32) (result i32)
         (select (local.get $b) (local.get $a)
                 (i32.le_u (local.get $a) (local.get $b))))
 
-    ;;; fn rem_abs_i32(a: i32, b: i32, signed: bool) -> i32
+    ;; fn rem_abs_i32(a: i32, b: i32, signed: bool) -> i32
     (func $rem_abs_i32 (param $a i32) (param $b i32) (param $signed i32) (result i32)
         (select
             (call $i32s_abs (i32.rem_s (local.get $a) (local.get $b)))
             (i32.rem_u (local.get $a) (local.get $b))
             (local.get $signed)))
     
-    ;;; fn div_abs_i32(a: i32, b: i32, signed: bool) -> i32
+    ;; fn div_abs_i32(a: i32, b: i32, signed: bool) -> i32
     (func $div_abs_i32 (param $a i32) (param $b i32) (param $signed i32) (result i32)
         (select
             (call $i32s_abs (i32.div_s (local.get $a) (local.get $b)))
             (i32.div_u (local.get $a) (local.get $b))
             (local.get $signed)))
 
-    ;;; fn i32_to_string(num: i32, signed: bool) -> (*mut u8, usize)
-    ;;; Converts a 32-bit integer to a string, allocated on the heap by this
-    ;;; function. `signed` determines whether or not the integer is interpreted
-    ;;; as unsigned or signed.
+    ;; fn i32_to_string(num: i32, signed: bool) -> (*mut u8, usize)
+    ;;
+    ;; Converts a 32-bit integer to a string, allocated on the heap by this
+    ;; function. `signed` determines whether or not the integer is interpreted
+    ;; as unsigned or signed.
     (func $i32_to_string (param $num i32) (param $signed i32) (result i32 i32)
         (local $buf i32) (local $buf_new i32)
         (local $ptr i32)
@@ -920,13 +969,14 @@
 
     ;; === printf & co. === ;;
 
-    ;;; fn print(str: *const u8, len: u32) -> errno;
-    ;;; Print a string to stdout.
-    ;;;
-    ;;; # Safety
-    ;;;
-    ;;; - `str` must be a valid, well-aligned pointer to a valid UTF-8 string
-    ;;; - `str` must point to valid data up to an offset of `n` bytes
+    ;; fn print(str: *const u8, len: u32) -> errno;
+    ;;
+    ;; Print a string to stdout.
+    ;;
+    ;; # Safety
+    ;;
+    ;; - `str` must be a valid, well-aligned pointer to a valid UTF-8 string
+    ;; - `str` must point to valid data up to an offset of `n` bytes
     (func $print (param $str i32) (param $len i32) (result i32)
         ;; static_ciovec->str = str
         (i32.store
@@ -953,32 +1003,32 @@
             (global.get $data_garbage_u32_offset))
     )
 
-    ;;; fn snprintf(
-    ;;;     buf: *mut u8, buf_len: isize,
-    ;;;     fmt: *const u8, fmt_len: isize,
-    ;;;     args: *const u8) -> isize;
-    ;;; Print a formatted string to the provided buffer.
-    ;;; If the string could be fully printed, the number of characters printed is returned.
-    ;;; Otherwise, `-new_size` is returned where `new_size` is how large the buffer needs to be to successfully print.
-    ;;;
-    ;;; `args` is a pointer to an argument list, whose format is explained below.
-    ;;; `args` may be null (0) IF AND ONLY IF the format string provided does not contain ANY specifiers (excluding `%%`).
-    ;;;
-    ;;; # Supported Format Specifiers
-    ;;; 
-    ;;; - `%s`: string
-    ;;; - `%d`: i32
-    ;;; - `%%`: just prints `%`.
-    ;;;
-    ;;; # Argument List
-    ;;;
-    ;;; The following list contains inline struct definitions for printf-family functions.
-    ;;; All padding fields are undefined and may be arbitrary data.
-    ;;;
-    ;;; - `%s`:
-    ;;;     ptr: *mut u8, len: usize
-    ;;; - `%d`:
-    ;;;     val: i32, padding: u32
+    ;; fn snprintf( buf: *mut u8, buf_len: isize, fmt: *const u8, fmt_len:
+    ;;     isize, args: *const u8) -> isize;
+    ;;
+    ;; Print a formatted string to the provided buffer.
+    ;;
+    ;; If the string could be fully printed, the number of characters printed is
+    ;; returned. Otherwise, `-new_size` is returned where `new_size` is how
+    ;; large the buffer needs to be to successfully print.
+    ;;
+    ;; `args` is a pointer to an argument list, whose format is explained below.
+    ;; `args` may be null (0) IF AND ONLY IF the format string provided does not
+    ;; contain ANY specifiers (excluding `%%`).
+    ;;
+    ;; # Supported Format Specifiers
+    ;;
+    ;; - `%s`: string
+    ;; - `%d`: i32
+    ;; - `%%`: just prints `%`.
+    ;;
+    ;; # Argument List
+    ;;
+    ;; The following list contains inline struct definitions for printf-family
+    ;; functions. All padding fields are undefined and may be arbitrary data.
+    ;;
+    ;; - `%s`: ptr: *mut u8, len: usize
+    ;; - `%d`: val: i32, padding: u32
     (func $snprintf (param $buf i32) (param $buf_len i32)
                     (param $fmt i32) (param $fmt_len i32)
                     (param $args i32) (result i32)
@@ -1163,9 +1213,11 @@
             (local.get $simulate))
     )
 
-    ;;; fn sprintf(fmt: *mut u8, fmt_len: isize, args: *const u8) -> (*mut u8, isize);
-    ;;; Print a formatted string to a buffer allocated by this function.
-    ;;; See `snprintf` for more documentation.
+    ;; fn sprintf(fmt: *mut u8, fmt_len: isize, args: *const u8) -> (*mut u8,
+    ;; isize);
+    ;;
+    ;; Print a formatted string to a buffer allocated by this function. See
+    ;; `snprintf` for more documentation.
     (func $sprintf (param $fmt i32) (param $fmt_len i32) (param $args i32) (result i32 i32)
         (local $buf i32) (local $len i32) (local $res i32)
     
@@ -1195,9 +1247,10 @@
         (local.get $buf)
     )
 
-    ;;; fn printf(fmt: *mut u8, fmt_len: isize, args: *const u8);
-    ;;; Print a formatted string to stdout.
-    ;;; See `snprintf` for more documentation.
+    ;; fn printf(fmt: *mut u8, fmt_len: isize, args: *const u8);
+    ;;
+    ;; Print a formatted string to stdout. See `snprintf` for more
+    ;; documentation.
     (func $printf (param $fmt i32) (param $fmt_len i32) (param $args i32)
         (local $str i32) (local $len i32)
         (call $sprintf (local.get $fmt) (local.get $fmt_len) (local.get $args))
@@ -1209,29 +1262,98 @@
         
         (call $dealloc (local.get $str)))
 
+    ;; === Vectors === ;;
+    
+    ;; A very simple implementation of vectors.
+    ;; struct Vec<T> {
+    ;;   ptr: Box<VecInner<T>>,
+    ;; }
+    ;;
+    ;; struct VecInner<T> {
+    ;;   cap: usize, // how many elements this vector *could* store
+    ;;   len: usize, // how many elements this vector is storing
+    ;;   sizeof: usize, // if we had macros, we could monomorphize with each
+    ;;                     type and have this statically. but alas, we don't,
+    ;;                     so we won't.
+    ;;   data: [T; cap],  // the raw data.
+    ;; }
+
+    ;; fn __vec_get_cap<T>(vec: Vec<T>) -> usize;
+    (func $__vec_get_cap (param $vec i32) (result i32)
+        (i32.load (local.get $vec)))
+    
+    ;; fn __vec_set_cap<T>(vec: Vec<T>, cap: usize);
+    (func $__vec_set_cap (param $vec i32) (param $cap i32)
+        (i32.store (local.get $vec) (local.get $cap)))
+
+    ;; fn __vec_get_len<T>(vec: Vec<T>) -> usize;
+    (func $__vec_get_len (param $vec i32) (result i32)
+        (i32.load offset=4 (local.get $vec)))
+    
+    ;; fn __vec_set_len<T>(vec: Vec<T>, len: usize);
+    (func $__vec_set_len (param $vec i32) (param $len i32)
+        (i32.store offset=4 (local.get $vec) (local.get $len)))
+    
+    ;; fn __vec_get_sizeof<T>(vec: Vec<T>) -> usize;
+    (func $__vec_get_sizeof (param $vec i32) (result i32)
+        (i32.load offset=8 (local.get $vec)))
+    
+    ;; fn __vec_set_sizeof<T>(vec: Vec<T>, sizeof: usize);
+    (func $__vec_set_sizeof (param $vec i32) (param $sizeof i32)
+        (i32.store offset=8 (local.get $vec) (local.get $sizeof)))
+    
+    ;; fn __vec_data_ptr<T>(vec: Vec<T>) -> *mut T;
+    ;;
+    ;; note: this ptr may not be valid
+    (func $__vec_data_ptr (param $vec i32) (result i32)
+        (i32.add (i32.const 12) (local.get $vec)))
+    
+    ;; fn vec_create<T>(sizeof: usize) -> Vec<T>;
+    ;;
+    ;; NOTE: sizeof MUST equal sizeof(T)
+    (func $vec_create (param $sizeof i32) (result i32)
+        (local $ptr i32)
+        (local.set $ptr (call $malloc (i32.const 8)))
+        (call $__vec_set_cap (local.get $ptr) (i32.const 0))
+        (call $__vec_set_len (local.get $ptr) (i32.const 0))
+        (call $__vec_set_sizeof (local.get $ptr) (local.get $sizeof))
+        (local.get $ptr))
+    
+    ;; fn vec_destroy<T>(vec: Vec<T>);
+    ;;
+    ;; NOTE: This does not call any type of destructor on the data within.
+    (func $vec_destroy (param $vec i32)
+        (call $dealloc (local.get $vec)))
+
+    ;; fn vec_get<T>(vec: Vec<T>, idx: usize) -> *mut T;
+    (func $vec_get (param $vec i32) (param $idx i32) (result i32)
+        (local $len i32) (local $arg i32)
+        (local.set $len (call $__vec_get_len (local.get $vec)))
+
+        (if (i32.ge_u (local.get $idx) (local.get $len))
+            (block
+                (local.set $arg (call $malloc (i32.const 16)))
+                (i32.store (local.get $arg) (local.get $idx))
+                (i32.store offset=8 (local.get $arg) (local.get $len))
+                (call $printf (global.get $data_vec_idx_out_of_range_offset)
+                              (global.get $data_vec_idx_out_of_range_size)
+                              (local.get $arg))
+                (call $dealloc (local.get $arg))
+                (call $proc_exit (i32.const 1))
+                (unreachable)
+            ))
+        (i32.add
+            (call $__vec_data_ptr (local.get $vec))
+            (i32.mul (call $__vec_get_sizeof (local.get $vec))
+                     (local.get $idx))))
+
     ;; === Start === ;;
 
     (func $main (export "_start")
-        (local $arg i32) (local $rc i32)
-
-        (local.set $arg
-            (call $malloc (i32.const 32)))
-        (i32.store (local.get $arg) (global.get $data_str2_offset))
-        (i32.store offset=4 (local.get $arg) (global.get $data_str2_size))
-        (i32.store offset=8 (local.get $arg) (i32.const 4294967295))
-        (i32.store offset=16 (local.get $arg) (i32.const 4294967295))
-
-        (call $printf (global.get $data_str3_offset) (global.get $data_str3_size) (local.get $arg))
-
-        (call $dealloc
-            (local.get $arg))
-
-        (local.set $rc (call $malloc (i32.const 4)))
-        (i32.store (local.get $rc) (i32.const 12345))
-        (local.set $rc (call $rc_create (local.get $rc) (i32.const 4) (global.get $elem_dropper_func)))
-        (call $rc_acq (local.get $rc))
-        (call $rc_rel (local.get $rc))
-        (call $rc_rel (local.get $rc))
+        (local $vec i32)
+        (local.set $vec (call $vec_create (i32.const 4)))
+        (call $vec_get (local.get $vec) (i32.const 5))
+        (drop)
     )
 
     (func $dropper_func (param $ptr i32)
@@ -1245,61 +1367,67 @@
     ;; === Static Data === ;;
 
 ;;DATA BEGIN;;
-    ;;; name: panic_double_dealloc
-    ;;; size: 0x18
+    ;; name: panic_double_dealloc
+    ;; size: 0x18
     (global $data_panic_double_dealloc_offset i32 (i32.const 0x00))
     (global $data_panic_double_dealloc_size i32 (i32.const 0x18))
     (data (i32.const 0x00) "panic: double dealloc()\n")
 
-    ;;; name: panic_release_rc_at_0
-    ;;; size: 0x35
+    ;; name: panic_release_rc_at_0
+    ;; size: 0x35
     (global $data_panic_release_rc_at_0_offset i32 (i32.const 0x18))
     (global $data_panic_release_rc_at_0_size i32 (i32.const 0x35))
     (data (i32.const 0x18) "panic: tried to rc_rel an Rc<T> with a refcount of 0\n")
 
-    ;;; name: str1
-    ;;; size: 0x0e
-    (global $data_str1_offset i32 (i32.const 0x50))
+    ;; name: vec_idx_out_of_range
+    ;; size: 0x2a
+    (global $data_vec_idx_out_of_range_offset i32 (i32.const 0x50))
+    (global $data_vec_idx_out_of_range_size i32 (i32.const 0x2a))
+    (data (i32.const 0x50) "panic: index out of range: idx=%u, len=%u\n")
+
+    ;; name: str1
+    ;; size: 0x0e
+    (global $data_str1_offset i32 (i32.const 0x7c))
     (global $data_str1_size i32 (i32.const 0x0e))
-    (data (i32.const 0x50) "Hello, world!\n")
+    (data (i32.const 0x7c) "Hello, world!\n")
 
-    ;;; name: str2
-    ;;; size: 0x0f
-    (global $data_str2_offset i32 (i32.const 0x60))
+    ;; name: str2
+    ;; size: 0x0f
+    (global $data_str2_offset i32 (i32.const 0x8c))
     (global $data_str2_size i32 (i32.const 0x0f))
-    (data (i32.const 0x60) "This is a test!")
+    (data (i32.const 0x8c) "This is a test!")
 
-    ;;; name: str3
-    ;;; size: 0x17
-    (global $data_str3_offset i32 (i32.const 0x70))
+    ;; name: str3
+    ;; size: 0x17
+    (global $data_str3_offset i32 (i32.const 0x9c))
     (global $data_str3_size i32 (i32.const 0x17))
-    (data (i32.const 0x70) "Hello, world! %s %d %u\n")
+    (data (i32.const 0x9c) "Hello, world! %s %d %u\n")
 
-    ;;; name: str4
-    ;;; size: 0x0b
-    (global $data_str4_offset i32 (i32.const 0x88))
+    ;; name: str4
+    ;; size: 0x0b
+    (global $data_str4_offset i32 (i32.const 0xb4))
     (global $data_str4_size i32 (i32.const 0x0b))
-    (data (i32.const 0x88) "dropped %u\n")
+    (data (i32.const 0xb4) "dropped %u\n")
 
-    ;;; name: garbage_u32
-    ;;; size: 0x04
-    (global $data_garbage_u32_offset i32 (i32.const 0x94))
+    ;; name: garbage_u32
+    ;; size: 0x04
+    (global $data_garbage_u32_offset i32 (i32.const 0xc0))
     (global $data_garbage_u32_size i32 (i32.const 0x04))
-    (data (i32.const 0x94) "\00\00\00\00")
+    (data (i32.const 0xc0) "\00\00\00\00")
 
-    ;;; name: static_ciovec
-    ;;; size: 0x08
-    (global $data_static_ciovec_offset i32 (i32.const 0x98))
+    ;; name: static_ciovec
+    ;; size: 0x08
+    (global $data_static_ciovec_offset i32 (i32.const 0xc4))
     (global $data_static_ciovec_size i32 (i32.const 0x08))
-    (data (i32.const 0x98) "\00\00\00\00\00\00\00\00")
+    (data (i32.const 0xc4) "\00\00\00\00\00\00\00\00")
 
-    ;;; name: garbage_v128
-    ;;; size: 0x10
-    (global $data_garbage_v128_offset i32 (i32.const 0xa0))
+    ;; name: garbage_v128
+    ;; size: 0x10
+    (global $data_garbage_v128_offset i32 (i32.const 0xcc))
     (global $data_garbage_v128_size i32 (i32.const 0x10))
-    (data (i32.const 0xa0) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
+    (data (i32.const 0xcc) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00")
 
-    (global $data_end i32 (i32.const 0xb0))
+    (global $data_end i32 (i32.const 0xdc))
 
     (global $elem_dropper_func i32 (i32.const 0))
     (elem (i32.const 0) $dropper_func)

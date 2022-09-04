@@ -58,8 +58,8 @@ fn main() -> eyre::Result<()> {
     let mut new_data_string = String::new();
     writeln!(new_data_string, ";;DATA BEGIN;;")?;
     for (name, size, data) in data {
-        writeln!(new_data_string, "    ;;; name: {}", &name)?;
-        writeln!(new_data_string, "    ;;; size: 0x{:<02x}", size)?;
+        writeln!(new_data_string, "    ;; name: {}", &name)?;
+        writeln!(new_data_string, "    ;; size: 0x{:<02x}", size)?;
         writeln!(
             new_data_string,
             "    (global $data_{}_offset i32 (i32.const 0x{:<02x}))",
