@@ -4,3 +4,5 @@ knight.wasm
 !wasm-runner-js/knight.wasm
 .vscode/
 *.cwasm
+.*#
+*~
