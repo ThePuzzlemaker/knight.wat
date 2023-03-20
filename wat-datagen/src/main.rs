@@ -58,21 +58,21 @@ fn main() -> eyre::Result<()> {
     let mut new_data_string = String::new();
     writeln!(new_data_string, ";;DATA BEGIN;;")?;
     for (name, size, data) in data {
-        writeln!(new_data_string, "    ;; name: {}", &name)?;
-        writeln!(new_data_string, "    ;; size: 0x{:<02x}", size)?;
+        writeln!(new_data_string, " ;; name: {}", &name)?;
+        writeln!(new_data_string, " ;; size: 0x{:<02x}", size)?;
         writeln!(
             new_data_string,
-            "    (global $data_{}_offset i32 (i32.const 0x{:<02x}))",
+            " (global $data_{}_offset i32 (i32.const 0x{:<02x}))",
             &name, offset
         )?;
         writeln!(
             new_data_string,
-            "    (global $data_{}_size i32 (i32.const 0x{:<02x}))",
+            " (global $data_{}_size i32 (i32.const 0x{:<02x}))",
             &name, size
         )?;
         writeln!(
             new_data_string,
-            "    (data (i32.const 0x{:<02x}) \"{}\")",
+            " (data (i32.const 0x{:<02x}) \"{}\")",
             offset, data
         )?;
         writeln!(new_data_string)?;
@@ -84,7 +84,7 @@ fn main() -> eyre::Result<()> {
     }
     writeln!(
         new_data_string,
-        "    (global $data_end i32 (i32.const 0x{:<02x}))",
+        " (global $data_end i32 (i32.const 0x{:<02x}))",
         offset
     )?;
 
@@ -98,7 +98,7 @@ fn main() -> eyre::Result<()> {
         }
         writeln!(
             new_data_string,
-            "    (global $elem_{} i32 (i32.const {}))",
+            " (global $elem_{} i32 (i32.const {}))",
             line, idx
         )?;
         idx += 1;
@@ -106,7 +106,7 @@ fn main() -> eyre::Result<()> {
     }
     writeln!(
         new_data_string,
-        "    (elem (i32.const 0) {})",
+        " (elem (i32.const 0) {})",
         funcs
             .into_iter()
             .map(|x| format!("${}", x))
