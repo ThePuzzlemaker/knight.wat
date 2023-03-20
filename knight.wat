@@ -1410,6 +1410,45 @@
        (call $__vec_set_len (local.get $vec) (i32.sub (local.get $len)
                                                       (i32.const 1)))
        (i32.const 1))
+
+ ;; fn vec_reserve_exact<T>(vec: mut Vec<T>, amt: usize);
+ ;;
+ ;; Reserve enough space for at least `amt` more elements. This
+ ;; function will perform the minimal amount of allocation necessary.
+ (func $vec_reserve_exact (param $vec i32) (param $amt i32)
+       (local $data_ptr i32) (local $data_size i32) (local $sizeof i32)
+       (local $cap i32) (local $len i32)
+       (local $actual_amt i32)
+
+       (local.set $data_ptr (call $__vec_get_data_ptr (local.get $vec)))
+       (local.set $cap (call $__vec_get_cap (local.get $vec)))
+       (local.set $len (call $__vec_get_len (local.get $vec)))
+       (local.set $sizeof (call $__vec_get_sizeof (local.get $vec)))
+
+       ;; actual amount needed = amt - (cap - len)
+       (local.set $actual_amt (i32.sub (local.get $amt)
+				       (i32.sub (local.get $cap)
+						(local.get $len))))
+       
+       (local.set $cap (i32.add (local.get $cap)
+				(local.get $actual_amt)))
+       (local.set $data_size (i32.mul (local.get $sizeof)
+				      (local.get $cap)))
+       
+       (local.set $data_ptr (if (result i32) (i32.eqz (local.get $data_ptr))
+				(call $malloc (local.get $data_size))
+			      (call $realloc (local.get $data_ptr) (local.get $data_size))))
+       (call $__vec_set_data_ptr (local.get $vec) (local.get $data_ptr))
+       (call $__vec_set_cap (local.get $vec) (local.get $cap)))
+ 
+ ;; fn vec_with_cap<T>(cap: usize, sizeof: usize) -> Vec<T>;
+ ;;
+ ;; Create a vector with the given capacity.
+ (func $vec_with_cap (param $cap i32) (param $sizeof i32) (result i32)
+       (local $vec i32)
+       (local.set $vec (call $vec_create (local.get $sizeof)))
+       (call $vec_reserve_exact (local.get $vec) (local.get $cap))
+       (local.get $vec))
  
  ;; === Start === ;;
  
@@ -1422,17 +1461,7 @@
        (local.set $ptr
 		  (call $vec_push (local.get $vec)))
        (i32.store (local.get $ptr) (i32.const 424242))
-
-       (local.set $arg (call $malloc (i32.const 16)))
-       (i32.store (local.get $arg) (i32.load (call $vec_get (local.get $vec) (i32.const 0))))
-       (i32.store offset=8 (local.get $arg) (i32.load (call $vec_get (local.get $vec) (i32.const 1))))
-       (call $printf (global.get $data_str3_offset) (global.get $data_str3_size) (local.get $arg))
-       (if (i32.eq (i32.const 1) (call $vec_pop (local.get $vec)))
-	   (call $printf (global.get $data_str2_offset) (global.get $data_str2_size) (i32.const 0)))
-       (if (i32.eq (i32.const 1) (call $vec_pop (local.get $vec)))
-	   (call $printf (global.get $data_str2_offset) (global.get $data_str2_size) (i32.const 0)))
-       (if (i32.eq (i32.const 1) (call $vec_pop (local.get $vec)))
-	   (call $printf (global.get $data_str2_offset) (global.get $data_str2_size) (i32.const 0)))
+       
        (call $vec_destroy (local.get $vec)))
  
  (func $dropper_func (param $ptr i32)
@@ -1527,4 +1556,11 @@
  (export "vec_get" (func $vec_get))
  (export "vec_push" (func $vec_push))
  (export "i32_to_string" (func $i32_to_string))
- (export "vec_pop" (func $vec_pop)))
+ (export "vec_pop" (func $vec_pop))
+ (export "vec_reserve_exact" (func $vec_reserve_exact))
+ (export "vec_get_unchecked" (func $vec_get_unchecked))
+ (export "vec_with_cap" (func $vec_with_cap))
+ (export "__vec_get_cap" (func $__vec_get_cap))
+ (export "__vec_get_len" (func $__vec_get_len))
+ (export "__vec_get_sizeof" (func $__vec_get_sizeof))
+ (export "__vec_get_data_ptr" (func $__vec_get_data_ptr)))
